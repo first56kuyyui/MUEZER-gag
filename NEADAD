@@ -5484,10 +5484,291 @@ cheat.utility = {} do
                 end
                 return obj
         end
+        -- [Real fix] เช็คก่อนว่าตัวรันใช้ Drawing ได้จริงไหม (ตัวรันบางตัว เช่น REAL อาจไม่มี/ใช้ไม่ได้)
+        -- ถ้าใช้ไม่ได้จะสร้าง Drawing จำลองด้วย Instance (TextLabel/Frame+UIStroke) ขึ้นมาแทนอัตโนมัติ
+        -- ครอบคลุมเฉพาะชนิดที่สคริปต์ใช้จริง: Text / Circle / Line - ตัวรันที่ Drawing ใช้ได้ปกติ = เหมือนเดิมทุกอย่าง
+        -- [Real fix v2] ฟังก์ชันเลือกที่วาด GUI ที่ "วาดได้จริง" บนตัวรันนั้น ๆ
+        -- วิธี: ใส่ ScreenGui ทดสอบลง root แต่ละตัว รอ 2 เฟรม แล้วดู AbsoluteSize
+        -- ถ้าเอนจินไม่ได้วาด root นั้นจริง (เช่น gethui ปลอม) ขนาดจะยังเป็น 0 = ข้ามไปใช้ตัวถัดไป
+        -- ลำดับ: RobloxGui > CoreGui (เมนูหลักก็วาดที่ CoreGui และขึ้นจริงบน REAL) > gethui > PlayerGui
+        cheat.utility.pick_ui_root = function(gui_name, display_order)
+                local function try_parent(root)
+                        local ok, gui = pcall(function()
+                                local g = Instance.new("ScreenGui")
+                                g.Name = gui_name or "Folder"
+                                g.DisplayOrder = display_order or 0
+                                g.IgnoreGuiInset = true
+                                g.ResetOnSpawn = false
+                                g.Parent = root
+                                return g
+                        end)
+                        if ok and gui and gui.Parent then
+                                return gui
+                        end
+                        return nil
+                end
+                local candidates = {}
+                pcall(function()
+                        local RobloxGui = game:GetService("CoreGui"):FindFirstChild("RobloxGui")
+                        if RobloxGui then
+                                table.insert(candidates, RobloxGui)
+                        end
+                end)
+                pcall(function()
+                        table.insert(candidates, game:GetService("CoreGui"))
+                end)
+                pcall(function()
+                        if gethui then
+                                local hui = gethui()
+                                if hui then
+                                        table.insert(candidates, hui)
+                                end
+                        end
+                end)
+                pcall(function()
+                        local lp = game:GetService("Players").LocalPlayer
+                        local pg = lp and lp:FindFirstChildOfClass("PlayerGui")
+                        if pg then
+                                table.insert(candidates, pg)
+                        end
+                end)
+                for _, root in ipairs(candidates) do
+                        local gui = try_parent(root)
+                        if gui then
+                                local renders = false
+                                pcall(function()
+                                        task.wait()
+                                        task.wait()
+                                        renders = gui.AbsoluteSize.X > 100 and gui.AbsoluteSize.Y > 100
+                                end)
+                                if renders then
+                                        return gui
+                                end
+                                pcall(function()
+                                        gui:Destroy()
+                                end)
+                        end
+                end
+                return nil
+        end
+        cheat.DrawingImpl = (function()
+                -- [Real fix v2] รอบก่อนเช็คแค่ว่า "สร้าง Drawing ได้" แต่ REAL สร้างได้โดยที่
+                -- ตั้งค่า property ไม่ได้ / วาดไม่ขึ้นจริง ทำให้ init ของสคริปต์พังกลางทาง
+                -- (สคริปต์ดับตรงบรรทัดสร้าง indicator/วง FOV = ESP กับวง FOV ไม่มีวันโหลด)
+                -- รอบนี้ใช้ชุดวาดจำลองด้วย Instance เสมอ เพราะ Instance วาดได้จริงทุกตัวรัน
+                -- (ตัวเมนูเองก็วาดด้วย Instance และขึ้นปกติบน REAL)
+
+                -- [Real fix v2] เลือก root ด้วยการวัดผลจริง (เช็ค AbsoluteSize ว่าเอนจินวาดจริงไหม)
+                local shim_gui = cheat.utility.pick_ui_root("DrawingShim", 999999)
+
+                local function shim_refresh(self)
+                        local inst = self._inst
+                        if not inst then return end
+                        if self._kind == "Text" then
+                                inst.Text = self.Text
+                                inst.TextSize = self.Size
+                                inst.TextColor3 = self.Color
+                                inst.TextTransparency = self.Transparency
+                                inst.TextStrokeColor3 = self.OutlineColor
+                                inst.TextStrokeTransparency = self.Outline and self.Transparency or 1
+                                inst.AnchorPoint = self.Center and Vector2.new(0.5, 0.5) or Vector2.new(0, 0)
+                                inst.Position = UDim2.fromOffset(self.Position.X, self.Position.Y)
+                                inst.ZIndex = self.ZIndex + 1
+                                inst.Visible = self.Visible and shim_gui ~= nil or false
+                        elseif self._kind == "Circle" then
+                                -- [Real fix v3] วงกลมไม่ใช้ UIStroke แล้ว (REAL ไม่วาด UIStroke = วง FOV มองไม่เห็น)
+                                -- วาดวงแหวนด้วยเส้น Frame สั้นๆ เรียงรอบวง แบบเดียวกับ snapline ที่ REAL วาดได้จริง
+                                -- โหมด Filled = วงทึบด้วย Frame + UICorner (Frame ล้วน วาดได้ทุกตัวรัน)
+                                -- เขียนค่าลงเส้นเฉพาะตอนค่าเปลี่ยนจริง (กันยิง property ทิ้งทุกเฟรมเปล่าๆ)
+                                local d = math.max(self.Radius * 2, 1)
+                                inst.Size = UDim2.fromOffset(d, d)
+                                inst.Position = UDim2.fromOffset(self.Position.X, self.Position.Y)
+                                inst.ZIndex = self.ZIndex + 1
+                                inst.Visible = self.Visible and shim_gui ~= nil or false
+                                local fill = self._fill
+                                local ring = self._ring
+                                if not (fill and ring) then return end
+                                local sides = math.clamp(math.floor(self.NumSides or 64), 3, 64)
+                                local changed = self._cr ~= self.Radius or self._cth ~= self.Thickness
+                                        or self._cc ~= self.Color or self._ct ~= self.Transparency
+                                        or self._cn ~= sides or self._cf ~= self.Filled
+                                self._cr, self._cth, self._cc, self._ct, self._cn, self._cf
+                                        = self.Radius, self.Thickness, self.Color, self.Transparency, sides, self.Filled
+                                fill.Visible = self.Filled and inst.Visible or false
+                                if self.Filled then
+                                        fill.BackgroundColor3 = self.Color
+                                        fill.BackgroundTransparency = math.clamp(self.Transparency, 0, 1)
+                                        ring.Visible = false
+                                        return
+                                end
+                                ring.Visible = inst.Visible
+                                if not changed then return end
+                                local radius = math.max(self.Radius, 0.5)
+                                local thickness = math.clamp(self.Thickness, 0.5, 6)
+                                local seg_len = 2 * radius * math.tan(math.pi / sides) * 1.12 + 1
+                                while #ring:GetChildren() < sides do
+                                        local seg = Instance.new("Frame")
+                                        seg.BorderSizePixel = 0
+                                        seg.AnchorPoint = Vector2.new(0.5, 0.5)
+                                        seg.Parent = ring
+                                end
+                                local segs = ring:GetChildren()
+                                for i = 1, #segs do
+                                        local seg = segs[i]
+                                        if i <= sides then
+                                                local ang = (i / sides) * math.pi * 2
+                                                seg.Visible = true
+                                                seg.Position = UDim2.fromOffset(math.cos(ang) * radius + radius, math.sin(ang) * radius + radius)
+                                                seg.Rotation = math.deg(ang) + 90
+                                                seg.Size = UDim2.fromOffset(seg_len, thickness)
+                                                seg.BackgroundColor3 = self.Color
+                                                seg.BackgroundTransparency = math.clamp(self.Transparency, 0, 1)
+                                        else
+                                                seg.Visible = false
+                                        end
+                                end
+                        elseif self._kind == "Line" then
+                                local delta = self.To - self.From
+                                local len = delta.Magnitude
+                                inst.Size = UDim2.fromOffset(math.max(len, 0.01), math.max(self.Thickness, 0.1))
+                                inst.Position = UDim2.fromOffset((self.From.X + self.To.X) * 0.5, (self.From.Y + self.To.Y) * 0.5)
+                                inst.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+                                inst.BackgroundColor3 = self.Color
+                                inst.BackgroundTransparency = self.Transparency
+                                inst.ZIndex = self.ZIndex + 1
+                                inst.Visible = self.Visible and shim_gui ~= nil or false
+                        end
+                end
+
+                return {
+                        new = function(kind)
+                                local self = {
+                                        _kind = kind,
+                                        Visible = false,
+                                        Color = Color3.new(1, 1, 1),
+                                        Transparency = 0,
+                                        ZIndex = 0,
+                                        Position = Vector2.new(0, 0),
+                                        Text = "",
+                                        Size = 13,
+                                        Center = false,
+                                        Outline = false,
+                                        OutlineColor = Color3.new(0, 0, 0),
+                                        Radius = 50,
+                                        NumSides = 100,
+                                        Thickness = 1,
+                                        Filled = false,
+                                        From = Vector2.new(0, 0),
+                                        To = Vector2.new(0, 0),
+                                        _inst = nil,
+                                        _stroke = nil
+                                }
+
+                                if kind == "Text" then
+                                        local lbl = Instance.new("TextLabel")
+                                        lbl.BackgroundTransparency = 1
+                                        lbl.BorderSizePixel = 0
+                                        lbl.AutomaticSize = Enum.AutomaticSize.X
+                                        lbl.Size = UDim2.fromOffset(0, self.Size + 2)
+                                        lbl.Font = Enum.Font.Code
+                                        lbl.TextXAlignment = Enum.TextXAlignment.Left
+                                        lbl.TextYAlignment = Enum.TextYAlignment.Center
+                                        lbl.TextColor3 = self.Color
+                                        lbl.TextStrokeColor3 = self.OutlineColor
+                                        lbl.TextStrokeTransparency = 1
+                                        lbl.TextSize = self.Size
+                                        lbl.Text = ""
+                                        lbl.ZIndex = 1
+                                        lbl.Visible = false
+                                        if shim_gui then lbl.Parent = shim_gui end
+                                        self._inst = lbl
+                                elseif kind == "Circle" then
+                                        -- [Real fix v3] วงกลม = Frame ทึบ (โหมด Filled) + วงแหวนเส้น Frame
+                                        -- (ตัด UIStroke ทิ้ง - REAL ไม่วาด UIStroke เลยวง FOV ถึงไม่ขึ้น)
+                                        local fr = Instance.new("Frame")
+                                        fr.BackgroundTransparency = 1
+                                        fr.BorderSizePixel = 0
+                                        fr.AnchorPoint = Vector2.new(0.5, 0.5)
+                                        fr.Size = UDim2.fromOffset(self.Radius * 2, self.Radius * 2)
+                                        fr.ZIndex = 1
+                                        fr.Visible = false
+                                        local fill = Instance.new("Frame")
+                                        fill.Size = UDim2.fromScale(1, 1)
+                                        fill.BackgroundColor3 = self.Color
+                                        fill.BackgroundTransparency = 1
+                                        fill.BorderSizePixel = 0
+                                        fill.Parent = fr
+                                        local fill_corner = Instance.new("UICorner")
+                                        fill_corner.CornerRadius = UDim.new(0.5, 0)
+                                        fill_corner.Parent = fill
+                                        local ring = Instance.new("Frame")
+                                        ring.Size = UDim2.fromScale(1, 1)
+                                        ring.BackgroundTransparency = 1
+                                        ring.BorderSizePixel = 0
+                                        ring.Parent = fr
+                                        if shim_gui then fr.Parent = shim_gui end
+                                        self._inst = fr
+                                        self._fill = fill
+                                        self._ring = ring
+                                elseif kind == "Line" then
+                                        local fr = Instance.new("Frame")
+                                        fr.BorderSizePixel = 0
+                                        fr.AnchorPoint = Vector2.new(0.5, 0.5)
+                                        fr.BackgroundColor3 = self.Color
+                                        fr.BackgroundTransparency = self.Transparency
+                                        fr.ZIndex = 1
+                                        fr.Visible = false
+                                        if shim_gui then fr.Parent = shim_gui end
+                                        self._inst = fr
+                                else
+                                        error("DrawingShim: unsupported drawing type " .. tostring(kind))
+                                end
+
+                                shim_refresh(self)
+
+                                return setmetatable({}, {
+                                        __index = function(_, key)
+                                                if key == "Remove" then
+                                                        return function()
+                                                                if self._inst then
+                                                                        self._inst:Destroy()
+                                                                        self._inst = nil
+                                                                        self._stroke = nil
+                                                                end
+                                                        end
+                                                end
+                                                return self[key]
+                                        end,
+                                        __newindex = function(_, key, value)
+                                                self[key] = value
+                                                shim_refresh(self)
+                                        end
+                                })
+                        end
+                }
+        end)()
+
         cheat.utility.new_drawing = function(drawobj, args)
-                local obj = Drawing.new(drawobj)
+                -- [Real fix v2] กันทุกขั้นตอน error ไปดับ init ทั้งสาย (indicator/วง FOV/snapline สร้างตอนเปิดสคริปต์)
+                local ok_obj, obj = pcall(function()
+                        return cheat.DrawingImpl.new(drawobj)
+                end)
+                if not (ok_obj and obj) then
+                        -- วัตถุกันพัง: ไม่วาดจริง แต่รับ property/Remove ได้ สคริปต์จะไม่ดับแน่นอน
+                        return setmetatable({}, {
+                                __newindex = function() end,
+                                __index = function(_, key)
+                                        if key == "Remove" then
+                                                return function() end
+                                        end
+                                        return nil
+                                end
+                        })
+                end
                 for i, v in (args) do
-                        obj[i] = v
+                        pcall(function()
+                                obj[i] = v
+                        end)
                 end
                 cheat.drawings[obj] = obj
                 return obj
@@ -5509,12 +5790,14 @@ cheat.utility = {} do
                 end)() end
         local connection; connection = RunService.Heartbeat:Connect(LPH_NO_VIRTUALIZE(function(delta)
                 for _, func in (cheat.connections.heartbeats) do
-                        func(delta)
+                        -- [Real fix v2] ฟังก์ชันไหน error ให้ข้าม อย่าตัดลูปทั้งอัน (ไม่งั้นฟังก์ชันที่ลงทะเบียนทีหลังจะไม่ถูกรันเลย)
+                        pcall(func, delta)
                 end
         end))
         local connection1; connection1 = RunService.PreRender:Connect(LPH_NO_VIRTUALIZE(function(delta)
                 for _, func in (cheat.connections.renderstepped) do
-                        func(delta)
+                        -- [Real fix v2] เหมือนด้านบน: กันลูปวาด ESP/วง FOV ถูกตัดสายเพราะฟังก์ชันอื่น error ทุกเฟรม
+                        pcall(func, delta)
                 end
         end))
         cheat.utility.unload = function()
@@ -5565,7 +5848,21 @@ LPH_NO_VIRTUALIZE(function()
         local rservice = game:GetService("RunService")
         local plrs = game:GetService("Players")
         local lplr = plrs.LocalPlayer
-        local container = Instance.new("Folder", game:GetService("CoreGui").RobloxGui)
+        -- [Real fix v2] รอบก่อนแค่ "ใส่ลง root ได้" แต่เลือก root ที่เอนจินไม่ได้วาดจริงได้ (เช่น gethui ปลอมบน REAL)
+        -- รอบนี้ใช้ pick_ui_root วัดผลจริงด้วย AbsoluteSize แล้ววาง container ลงใน ScreenGui ที่วาดได้แน่นอน
+        -- (IgnoreGuiInset = true เพื่อให้พิกัดตรงกับพื้นที่ RobloxGui เดิมที่สคริปต์คำนวณไว้)
+        local container
+        do
+                local gui = cheat.utility.pick_ui_root("Folder", 0)
+                if gui then
+                        container = Instance.new("Folder")
+                        container.Parent = gui
+                end
+                if not (container and container.Parent) then
+                        -- กันพังสุดท้าย: ESP ยังสร้าง element ได้ แม้ไม่เจอที่วาด (จะไม่แสดงผลแต่สคริปต์ไม่ดับ)
+                        container = Instance.new("Folder")
+                end
+        end
         local gui_inset = game:GetService("GuiService"):GetGuiInset()
 
         esp_table = {
@@ -5741,6 +6038,31 @@ LPH_NO_VIRTUALIZE(function()
                 return _Vector2zeromin(Camera.ViewportSize, unpack(corners)), _Vector2zeromax(Vector2.zero, unpack(corners))
         end
 
+        -- ======================================================================
+        -- [ESP แทนอันเก่า] ระบบวาด ESP ผู้เล่นด้วย Frame ล้วน พอร์ตจาก VodkaHub ESP
+        -- ตัวรัน REAL วาด Frame/TextLabel ได้จริง แต่ UIStroke/Drawing Line/Adornment ไม่แสดงผล
+        -- จึงใช้ Frame เอียงด้วย Rotation เป็นเส้นแทนเส้นทั้งหมด (ค่าทุกอย่างยังมาจากเมนู ESP เดิม)
+        -- ======================================================================
+        local r15Bones = {{"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"}, {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}}
+        local r6Bones = {{"Head", "Torso"}, {"Torso", "Left Arm"}, {"Torso", "Right Arm"}, {"Torso", "Left Leg"}, {"Torso", "Right Leg"}}
+
+        -- วาดเส้น 1 เส้นด้วย Frame เดียว: วางกึ่งกลางระหว่างจุด 2 จุด + ยาวเท่าระยะ + หมุนตามมุมจริง
+        local function setLineFrame(f, from, to, color, th)
+                local dx = to.X - from.X
+                local dy = to.Y - from.Y
+                local len = math.sqrt(dx * dx + dy * dy)
+                if len < 0.5 then f.Visible = false; return end
+                f.Position = UDim2.fromOffset(math.floor((from.X + to.X) / 2 + 0.5), math.floor((from.Y + to.Y) / 2 + 0.5))
+                f.Size = UDim2.fromOffset(math.floor(len + 0.5), th or 1)
+                f.Rotation = math.deg(math.atan2(dy, dx))
+                f.BackgroundColor3 = color
+                f.Visible = true
+        end
+
+        -- มุมกล่อง 4 มุม เลื่อนออกนอก (o บวก) หรือเข้าใน (o ลบ) o พิกเซล ใช้ทำเส้นขอบกล่อง
+        local function rectCorners(tl, tr, br, bl, o)
+                return _Vector2new(tl.X - o, tl.Y - o), _Vector2new(tr.X + o, tr.Y - o), _Vector2new(br.X + o, br.Y + o), _Vector2new(bl.X - o, bl.Y + o)
+        end
         local create_esp, create_object_esp, create_corpse_esp, create_item_esp, destroy_esp;
 
         create_esp = function(plr_instance)
@@ -5764,187 +6086,99 @@ LPH_NO_VIRTUALIZE(function()
                 local plr = loaded_plrs[plr_instance]
                 local obj = plr.obj
 
-                local main_holder = esp.create_obj("Frame", {
-                        Parent = container,
-                        ZIndex = 2,
-                        BorderSizePixel = 0,
-                        Size = UDim2.fromScale(0, 0),
-                        Position = UDim2.fromScale(0, 0),
-                        BackgroundTransparency = 1,
-                        Visible = false
-                }, obj)
-                local box_holder = esp.create_obj("Frame", {
-                        Parent = main_holder,
-                        ZIndex = -1,
-                        BorderSizePixel = 0,
-                        Size = UDim2.new(1, -2, 1, -2),
-                        Position = UDim2.new(0, 1, 0, 1),
-                        BackgroundTransparency = 1
-                }, obj)
-                local box_outline_holder = esp.create_obj("Frame", {
-                        Parent = main_holder,
-                        ZIndex = -1,
-                        BorderSizePixel = 0,
-                        BackgroundColor3 = Color3.new(1, 1, 1),
-                        Size = UDim2.new(1, -4, 1, -4),
-                        Position = UDim2.new(0, 2, 0, 2),
-                        BackgroundTransparency = 1
-                }, obj)
+                -- [ESP แทนอันเก่า] วัตถุวาด ESP ผู้เล่นทั้งหมด = Frame/TextLabel ล้วน ตามระบบ VodkaHub ESP
+                -- ทุกชิ้นเป็นลูกของ container (root ที่ [Real fix v2] เช็คแล้วว่าเอนจินวาดจริง) และลงทะเบียนใน obj
+                -- ให้ unload เดิมลบทิ้งเองได้ครบ ปุ่ม/ค่าทุกอันในเมนู ESP เดิมยังเป็นตัวคุมเหมือนเดิม
+                local function new_line(th)
+                        return esp.create_obj("Frame", {
+                                Parent = container,
+                                AnchorPoint = Vector2.new(0.5, 0.5),
+                                BorderSizePixel = 0,
+                                Size = UDim2.fromOffset(10, th),
+                                Visible = false,
+                                ZIndex = 3
+                        }, obj)
+                end
 
-                local main_box = esp.create_obj("UIStroke", {
-                        Parent = box_holder,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new(1, 1, 1)
-                }, obj)
-                local main_box_color = esp.create_obj("UIGradient", {
-                        Parent = main_box,
-                        Color = ColorSequence.new{
-                                ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
-                                ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
-                        }
-                }, obj)
-                local main_box_outline_1 = esp.create_obj("UIStroke", {
-                        Parent = main_holder,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
-                local main_box_outline_2 = esp.create_obj("UIStroke", {
-                        Parent = box_outline_holder,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
+                local box_lines = {}
+                for i = 1, 4 do box_lines[i] = new_line(1) end
+
+                local outline_out = {}
+                local outline_in = {}
+                for i = 1, 4 do
+                        outline_out[i] = new_line(1)
+                        outline_in[i] = new_line(1)
+                end
+
+                local skel_lines = {}
+                for i = 1, 15 do skel_lines[i] = new_line(1) end
+
+                local health_bg = new_line(2)
+                health_bg.BackgroundColor3 = Color3.new(0, 0, 0)
+                local health_bar = new_line(2)
 
                 local main_name = esp.create_obj("TextLabel", {
-                        Parent = main_holder,
+                        Parent = container,
+                        AnchorPoint = Vector2.new(0.5, 0.5),
                         TextStrokeTransparency = 0,
                         BorderSizePixel = 0,
-                        TextSize = 12,
+                        TextSize = 13,
                         FontFace = Fonts.Get("TahomaXP"),
                         TextColor3 = Color3.new(1, 1, 1),
                         BackgroundTransparency = 1,
-                        AnchorPoint = Vector2.new(0.5, 0),
-                        Size = UDim2.new(0, 10000, 0, 13),
+                        Size = UDim2.fromOffset(300, 16),
                         Text = plr_instance.Name,
-                        Position = UDim2.new(0.5, 0, 0, -17)
+                        Visible = false,
+                        ZIndex = 3
                 }, obj)
 
                 local main_distance = esp.create_obj("TextLabel", {
-                        Parent = main_holder,
+                        Parent = container,
+                        AnchorPoint = Vector2.new(0.5, 0.5),
                         TextStrokeTransparency = 0,
                         BorderSizePixel = 0,
                         TextSize = 12,
                         FontFace = Fonts.Get("TahomaXP"),
                         TextColor3 = Color3.new(1, 1, 1),
                         BackgroundTransparency = 1,
-                        AnchorPoint = Vector2.new(0.5, 0),
-                        Size = UDim2.new(0, 10000, 0, 13),
+                        Size = UDim2.fromOffset(150, 16),
                         Text = "0m",
-                        Position = UDim2.new(0.5, 0, 1, 1)
+                        Visible = false,
+                        ZIndex = 3
                 }, obj)
 
                 local main_weapon = esp.create_obj("TextLabel", {
-                        Parent = main_holder,
+                        Parent = container,
+                        AnchorPoint = Vector2.new(0.5, 0.5),
                         TextStrokeTransparency = 0,
                         BorderSizePixel = 0,
                         TextSize = 12,
                         FontFace = Fonts.Get("TahomaXP"),
                         TextColor3 = Color3.new(1, 1, 1),
                         BackgroundTransparency = 1,
-                        AnchorPoint = Vector2.new(0.5, 0),
-                        Size = UDim2.new(0, 10000, 0, 13),
+                        Size = UDim2.fromOffset(300, 16),
                         Text = "",
-                        Position = UDim2.new(0.5, 0, 1, 14)
-                }, obj)
-
-                esp.create_obj("UIStroke", {
-                        Parent = main_name,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
-
-                esp.create_obj("UIStroke", {
-                        Parent = main_distance,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
-
-                esp.create_obj("UIStroke", {
-                        Parent = main_weapon,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
-
-                local health_bar_holder = esp.create_obj("Frame", {
-                        Parent = main_holder,
-                        BackgroundColor3 = Color3.new(0, 0, 0),
-                        Size = UDim2.new(0, 1, 1, 0),
-                        Position = UDim2.new(0, -5, 0, 0),
-                        BorderSizePixel = 0
-                }, obj)
-
-                local health_bar_outline = esp.create_obj("UIStroke", {
-                        Parent = health_bar_holder,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
-
-                local main_health_bar = esp.create_obj("Frame", {
-                        Parent = health_bar_holder,
-                        ZIndex = 2,
-                        BorderSizePixel = 0,
-                        BackgroundColor3 = Color3.new(0, 0, 0),
-                        Size = UDim2.new(1, 0, 0, 0)
+                        Visible = false,
+                        ZIndex = 3
                 }, obj)
 
                 local main_health_text = esp.create_obj("TextLabel", {
-                        Parent = main_health_bar,
+                        Parent = container,
+                        AnchorPoint = Vector2.new(1, 0.5),
                         TextStrokeTransparency = 0,
                         BorderSizePixel = 0,
                         TextSize = 12,
-                        TextXAlignment = Enum.TextXAlignment.Right,
                         FontFace = Fonts.Get("TahomaXP"),
                         TextColor3 = Color3.new(1, 1, 1),
                         BackgroundTransparency = 1,
-                        AnchorPoint = Vector2.new(1, 0),
-                        Size = UDim2.new(50, 0, 0, 6),
-                        Text = "100",
-                        Position = UDim2.new(-2, 0, 1, 0)
-                }, obj)
-
-                esp.create_obj("UIStroke", {
-                        Parent = main_health_text,
-                        ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                        LineJoinMode = Enum.LineJoinMode.Miter,
-                        Color = Color3.new()
-                }, obj)
-
-                local health_bar_thing = esp.create_obj("Frame", {
-                        Parent = health_bar_holder,
-                        BorderSizePixel = 0,
-                        BackgroundColor3 = Color3.new(1, 1, 1),
-                        AnchorPoint = Vector2.new(0, 1),
-                        Size = UDim2.new(1, 0, 1, 0),
-                        Position = UDim2.new(0, 0, 1, 0)
-                }, obj)
-
-                local main_health_bar_color = esp.create_obj("UIGradient", {
-                        Parent = health_bar_thing,
-                        Rotation = 90,
-                        Color = ColorSequence.new{
-                                ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-                                ColorSequenceKeypoint.new(1, Color3.new(1, 1, 1))
-                        }
+                        Size = UDim2.fromOffset(40, 14),
+                        Text = "",
+                        Visible = false,
+                        ZIndex = 3
                 }, obj)
 
                 local flag_holder = esp.create_obj("Frame", {
-                        Parent = main_holder,
+                        Parent = container,
                         BorderSizePixel = 0,
                         Size = UDim2.new(1, 0, 1, 0),
                         Position = UDim2.new(1, 3, 0, -4),
@@ -5982,116 +6216,45 @@ LPH_NO_VIRTUALIZE(function()
                         }, obj)
                 end
 
-                local main_wireframe = esp.create_obj("WireframeHandleAdornment", {
-                        Parent = container,
-                        Color3 = Color3.new(1, 1, 1),
-                        Transparency = 0,
-                        AlwaysOnTop = true,
-                        CFrame = CFrame.new(),
-                        Scale = Vector3.one,
-                        Thickness = 1,
-                        AdornCullingMode = Enum.AdornCullingMode.Automatic
-                }, obj)
+                -- [ESP แทนอันเก่า] skeleton เดิมวาดด้วย WireframeHandleAdornment ซึ่งตัวรัน REAL ไม่แสดงผล
+                -- เปลี่ยนเป็นเส้น Frame 15 เส้น (skel_lines ด้านบน) ตามระบบ VodkaHub ESP ที่ขึ้นจริงทุกตัวรัน
 
 
 
                 local settings = esp_table.settings.enemy
                 local main_settings = settings.main_settings
 
-                local character, humanoid, head, root
-
-
-                local team_check, dead_check, dist_check, npc_check, visible_check = main_settings.team_check, main_settings.dead_check, main_settings.dist_check, main_settings.npc_check, main_settings.visible_check
-                local skeleton_rate = main_settings.skeleton_rate <= 0 and 1e-10 or main_settings.skeleton_rate
-                local max_distance, update_skeleton = main_settings.max_distance, settings.skeleton
-                local weapon_enabled, box_rotation = settings.weapon, settings.box_rotation
-
-                local gradient_spin, gradient_speed = main_settings.gradient_spin, main_settings.gradient_speed
-                local holder_spin, holder_speed = main_settings.holder_spin, main_settings.holder_speed
+                local character, humanoid, root
 
                 local get_team, get_gun = esp_table.get_team, esp_table.get_gun
 
                 local setvis_cache, skeleton_tick = false, 0
-                -- [ESP perf] แคชค่าล่าสุดไว้เทียบ เขียนลง UI เฉพาะตอนค่าเปลี่ยนเท่านั้น (แก้เฟรมตกตอนเปิดกล่อง ESP)
-                local last_holder_rot, last_grad_rot = nil, nil
-                local last_pos_x, last_pos_y, last_size_w, last_size_h = nil, nil, nil, nil
-                -- [FPS fix] แคชเพิ่มเติม: ข้อความระยะ/ปืน/เลือด + ตาราง bbox ใช้ซ้ำ (ลดงาน GC ทุกเฟรม)
-                local last_dist_m, last_health_scale, last_health_int = nil, nil, nil
+                -- [ESP perf] แคชค่าล่าสุดไว้เทียบ เขียนลง UI เฉพาะตอนค่าเปลี่ยนเท่านั้น
+                local last_dist_m, last_health_int = nil, nil
                 local last_gun, last_gun_dv = nil, nil
                 local last_cham_vis = nil
                 local bbox_cache, bbox_pool = table.create(15), {}
                 local cham_vis_ok = true
                 local vis_state_cache, vis_tick = nil, 0
+
+                -- [ESP แทนอันเก่า] สีกล่อง ปกติ/ตอนมองเห็น อ่านจาก box_color กับ box_visible_color เดิมของเมนู
                 local apply_box_color = function(is_visible)
                         local col = is_visible and settings.box_visible_color or settings.box_color
-                        main_box_color.Color = ColorSequence.new{
-                                ColorSequenceKeypoint.new(0, col[1]),
-                                ColorSequenceKeypoint.new(1, col[2])
-                        }
-                        main_box.Transparency = col[3]
+                        for _, ln in pairs(box_lines) do
+                                ln.BackgroundColor3 = col[1]
+                                ln.BackgroundTransparency = col[3]
+                        end
                 end
 
+                -- [ESP แทนอันเก่า] forceupdate: ตัวอื่นอ่านค่าเมนูตรง ๆ ใน render ทุกเฟรมแล้ว เหลือ sync ป้าย flags + chams แบบเดิม
                 function plr:forceupdate()
-                        team_check, dead_check, dist_check, npc_check, visible_check = main_settings.team_check, main_settings.dead_check, main_settings.dist_check, main_settings.npc_check, main_settings.visible_check
-                        skeleton_rate = main_settings.skeleton_rate <= 0 and 1e-10 or main_settings.skeleton_rate
-                        max_distance, update_skeleton = main_settings.max_distance, settings.skeleton
-                        weapon_enabled, box_rotation = settings.weapon, settings.box_rotation
-
-                        gradient_spin, gradient_speed = main_settings.gradient_spin, main_settings.gradient_speed
-                        holder_spin, holder_speed = main_settings.holder_spin, main_settings.holder_speed
-
-                        main_box_outline_1.Enabled = settings.box_outline
-                        main_box_outline_1.Color = settings.box_outline_color[1]
-                        main_box_outline_1.Transparency = settings.box_outline_color[2]
-
-                        main_box_outline_2.Enabled = settings.box_outline
-                        main_box_outline_2.Color = settings.box_outline_color[3]
-                        main_box_outline_2.Transparency = settings.box_outline_color[4]
-
-                        main_box.Enabled = settings.box
-                        main_box.Transparency = settings.box_color[3]
-                        main_box_color.Color = ColorSequence.new{
-                                ColorSequenceKeypoint.new(0, settings.box_color[1]),
-                                ColorSequenceKeypoint.new(1, settings.box_color[2])
-                        }
-                        main_box_color.Rotation = box_rotation + (gradient_spin and tick() % 1 * gradient_speed or 0)
-                        if vis_state_cache == true then
-                                apply_box_color(true)
-                        end
-
-                        health_bar_holder.Visible = settings.health_bar
-                        main_health_bar_color.Color = ColorSequence.new{
-                                ColorSequenceKeypoint.new(0, settings.health_bar_color[1]),
-                                ColorSequenceKeypoint.new(1, settings.health_bar_color[2])
-                        }
-
-                        main_health_text.Visible = settings.health_text
-                        main_health_text.TextColor3 = settings.health_text_color[1]
-                        main_health_text.TextTransparency = settings.health_text_color[2]
-
-                        main_name.Visible = settings.name
-                        main_name.TextColor3 = settings.name_color[1]
-                        main_name.TextTransparency = settings.name_color[2]
-
-                        main_distance.Visible = settings.distance
-                        main_distance.TextColor3 = settings.distance_color[1]
-                        main_distance.TextTransparency = settings.distance_color[2]
-
-                        main_weapon.Visible = settings.weapon
-                        main_weapon.TextColor3 = settings.weapon_color[1]
-                        main_weapon.TextTransparency = settings.weapon_color[2]
-
-                        main_wireframe.Visible = settings.skeleton
-                        main_wireframe.Color3 = settings.skeleton_color[1]
-                        main_wireframe.Transparency = settings.skeleton_color[2]
-
                         flag_holder.Visible = settings.flags
-                        for _, flag in flags_table do
+                        for _, flag in pairs(flags_table) do
                                 flag.TextColor3 = settings.flags_color[1]
                                 flag.TextTransparency = settings.flags_color[2]
                         end
 
-                        for part, cham in chams_table do
+                        for part, cham in pairs(chams_table) do
                                 cham.cham.Adornee = setvis_cache and settings.chams and (not settings.chams_visible_only or cham_vis_ok) and part or nil
                                 cham.cham.Color3 = Color3.new(
                                         settings.chams_color[1].R * settings.chams_glow_factor,
@@ -6140,18 +6303,30 @@ LPH_NO_VIRTUALIZE(function()
                         }
                 end
 
+                -- [ESP แทนอันเก่า] togglevis: ไม่มี main_holder แล้ว ซ่อน/แสดงทุกชิ้นด้วยมือ + จัดการ chams เหมือนเดิม
                 function plr:togglevis(bool, fade)
                         if setvis_cache == bool then return end
                         setvis_cache = bool
 
-                        main_holder.Visible = bool
                         if not bool then
-                                -- [ESP perf] พอซ่อนเป้า ล้างเส้น skeleton ทิ้งรอบเดียวพอ (กันเส้นค้างตอนเป้าตาย/หลุดจอ)
-                                main_wireframe:Clear()
-                                -- [FPS fix] รีเซ็ตแคช Adornee ของ chams ด้วย เพราะด้านล่างเขียน Adornee=nil ทับหมดแล้ว
-                                last_cham_vis = nil
+                                for _, ln in pairs(box_lines) do ln.Visible = false end
+                                for _, ln in pairs(outline_out) do ln.Visible = false end
+                                for _, ln in pairs(outline_in) do ln.Visible = false end
+                                for _, ln in pairs(skel_lines) do ln.Visible = false end
+                                health_bg.Visible = false
+                                health_bar.Visible = false
+                                main_name.Visible = false
+                                main_distance.Visible = false
+                                main_weapon.Visible = false
+                                main_health_text.Visible = false
+                                flag_holder.Visible = false
+                        else
+                                flag_holder.Visible = settings.flags
                         end
-                        for part, cham in chams_table do
+
+                        -- [FPS fix] รีเซ็ตแคช Adornee ของ chams ด้วย เพราะด้านล่างเขียน Adornee ทับหมดแล้ว
+                        last_cham_vis = nil
+                        for part, cham in pairs(chams_table) do
                                 cham.cham.Adornee = bool and settings.chams and (not settings.chams_visible_only or cham_vis_ok) and part or nil
                         end
                 end
@@ -6202,16 +6377,15 @@ LPH_NO_VIRTUALIZE(function()
                         plr.connections["character_removing"] = plr_instance.CharacterRemoving:Connect(character_removing)
                 end
 
+                -- [ESP แทนอันเก่า] render ใหม่: วาดด้วย Frame ล้วนตามระบบ VodkaHub ESP อ่านค่าเมนูเดิมทุกเฟรม
                 plr.render = function(delta, camera_position, current_tick)
-                        skeleton_tick += delta
-                        -- [ESP perf] เลิกล้างเส้น skeleton ทุกเฟรม (เดิมลบทุกเฟรมต่อทุกเป้า ทั้งที่ skeleton ปิดอยู่)
-                        -- ย้ายไปล้างที่จุดวาดจริงด้านล่าง + ล้างรอบเดียวตอนซ่อนเป้าใน togglevis
+                        skeleton_tick = skeleton_tick + delta
 
                         if not settings.enabled then
                                 return plr:togglevis(false)
                         end
 
-                        if (npc_check) and (is_npc) then
+                        if (main_settings.npc_check) and (is_npc) then
                                 return plr:togglevis(false)
                         end
 
@@ -6227,19 +6401,19 @@ LPH_NO_VIRTUALIZE(function()
                         local humanoid_max_health = is_helicopter and root:GetAttribute("MaxHealth") or humanoid.MaxHealth
                         local humanoid_distance = (camera_position - root.Position).Magnitude
 
-                        if (not is_npc and team_check) and get_team(plr_instance, character, humanoid) then
+                        if (not is_npc and main_settings.team_check) and get_team(plr_instance, character, humanoid) then
                                 return plr:togglevis(false)
                         end
 
-                        if (dead_check) and (humanoid_health <= 0) then
+                        if (main_settings.dead_check) and (humanoid_health <= 0) then
                                 return plr:togglevis(false)
                         end
 
-                        if (dist_check) and (humanoid_distance > max_distance) then
+                        if (main_settings.dist_check) and (humanoid_distance > main_settings.max_distance) then
                                 return plr:togglevis(false)
                         end
 
-                        if (visible_check) and not cheat.is_pos_visible(camera_position, root.Position, character) then
+                        if (main_settings.visible_check) and not cheat.is_pos_visible(camera_position, root.Position, character) then
                                 return plr:togglevis(false)
                         end
 
@@ -6249,32 +6423,53 @@ LPH_NO_VIRTUALIZE(function()
                                 return plr:togglevis(false)
                         end
 
-                        -- [FPS fix] เดิมสร้าง table ใหม่ ~16 ตัวต่อเป้าต่อเฟรม (GC หนักเฟรมตก)
-                        -- เอาตารางเดิมมาเคลียร์แล้วใช้ซ้ำ ค่าที่ได้เหมือนเดิมทุกอย่าง
-                        local topLeft, bottomRight, cache = nil, nil, bbox_cache
-                        table.clear(cache)
-                        do
-                                local count = 0
-                                for _, part in character:GetChildren() do
-                                        if _IsA(part, "BasePart") and isBodyPart(part.Name) then
-                                                local entry = bbox_pool[part.Name]
-                                                if not entry then
-                                                        entry = {}
-                                                        bbox_pool[part.Name] = entry
-                                                end
-                                                entry[1] = part.CFrame
-                                                entry[2] = part.Size
-                                                cache[part.Name] = entry
-                                                count += 1
-                                        end
-                                end
-                                if is_helicopter then
-                                        cache[root.Name] = {root.CFrame, root.Size}
-                                end
-                                if count <= 0 then
+                        -- [ESP แทนอันเก่า] มุมกล่อง: มี Head ใช้สูตร VodkaHub ESP (หัว+0.5 / เท้า-3 กว้าง = สูงหาร 2)
+                        -- ไม่มี Head (NPC/เฮลิคอปเตอร์) ใช้กล่อง bounding box ระบบเดิม
+                        local head_part = (not is_helicopter) and _FindFirstChild(character, "Head")
+                        local tl, tr, bl, br
+
+                        if head_part then
+                                local hPos, hOn = _WorldToViewportPoint(Camera, head_part.Position + _Vector3new(0, 0.5, 0))
+                                local fPos = _WorldToViewportPoint(Camera, root.Position - _Vector3new(0, 3, 0))
+                                if not hOn then
                                         return plr:togglevis(false)
                                 end
-                                topLeft, bottomRight = calculateCorners(getBoundingBox(cache))
+                                local height = math.abs(hPos.Y - fPos.Y)
+                                local width = height / 2
+                                tl = _Vector2new(hPos.X - width / 2, hPos.Y)
+                                tr = _Vector2new(hPos.X + width / 2, hPos.Y)
+                                bl = _Vector2new(hPos.X - width / 2, fPos.Y)
+                                br = _Vector2new(hPos.X + width / 2, fPos.Y)
+                        else
+                                local topLeft, bottomRight, cache = nil, nil, bbox_cache
+                                table.clear(cache)
+                                do
+                                        local count = 0
+                                        for _, part in pairs(character:GetChildren()) do
+                                                if _IsA(part, "BasePart") and isBodyPart(part.Name) then
+                                                        local entry = bbox_pool[part.Name]
+                                                        if not entry then
+                                                                entry = {}
+                                                                bbox_pool[part.Name] = entry
+                                                        end
+                                                        entry[1] = part.CFrame
+                                                        entry[2] = part.Size
+                                                        cache[part.Name] = entry
+                                                        count = count + 1
+                                                end
+                                        end
+                                        if is_helicopter then
+                                                cache[root.Name] = {root.CFrame, root.Size}
+                                        end
+                                        if count <= 0 then
+                                                return plr:togglevis(false)
+                                        end
+                                        topLeft, bottomRight = calculateCorners(getBoundingBox(cache))
+                                end
+                                tl = _Vector2new(topLeft.X - gui_inset.X, topLeft.Y - gui_inset.Y)
+                                br = _Vector2new(bottomRight.X - gui_inset.X, bottomRight.Y - gui_inset.Y)
+                                tr = _Vector2new(br.X, tl.Y)
+                                bl = _Vector2new(tl.X, br.Y)
                         end
 
                         plr:togglevis(true)
@@ -6286,27 +6481,15 @@ LPH_NO_VIRTUALIZE(function()
                                 -- [FPS fix] เดิมเขียน Adornee ทุก part ทุกเฟรมทั้งที่ค่าเดิม - เขียนเฉพาะตอนสถานะเปลี่ยน
                                 if cham_vis_ok ~= last_cham_vis then
                                         last_cham_vis = cham_vis_ok
-                                        for part, cham in chams_table do
+                                        for part, cham in pairs(chams_table) do
                                                 cham.cham.Adornee = cham_vis_ok and part or nil
                                         end
                                 end
                         end
 
                         do
-                                local holder_rot = holder_spin and current_tick * holder_speed % 360 or 0
-                                if holder_rot ~= last_holder_rot then
-                                        last_holder_rot = holder_rot
-                                        main_holder.Rotation = holder_rot
-                                end
-                                local grad_rot = box_rotation + (gradient_spin and current_tick * gradient_speed % 360 or 0)
-                                if grad_rot ~= last_grad_rot then
-                                        last_grad_rot = grad_rot
-                                        main_box_color.Rotation = grad_rot
-                                end
-                        end
-                        do
                                 if settings.box and settings.box_visible_enabled then
-                                        vis_tick += delta
+                                        vis_tick = vis_tick + delta
                                         if vis_tick >= 0.1 then
                                                 vis_tick = 0
                                                 local vis_ok = cheat.is_pos_visible(camera_position, root.Position, character)
@@ -6326,102 +6509,181 @@ LPH_NO_VIRTUALIZE(function()
                                 end
                         end
 
-                        do
-                                local pos = topLeft
-                                local size = bottomRight - topLeft
-                                local new_x, new_y = pos.X - gui_inset.X, pos.Y - gui_inset.Y
-                                local new_w, new_h = size.X, size.Y
-                                if new_x ~= last_pos_x or new_y ~= last_pos_y then
-                                        last_pos_x, last_pos_y = new_x, new_y
-                                        main_holder.Position = UDim2.fromOffset(new_x, new_y)
-                                end
-                                if new_w ~= last_size_w or new_h ~= last_size_h then
-                                        last_size_w, last_size_h = new_w, new_h
-                                        main_holder.Size = UDim2.fromOffset(new_w, new_h)
-                                end
+                        -- ป้าย/หลอดเลือดใช้ตำแหน่งกล่องที่ยังไม่หมุน (ป้ายอยู่บน/ใต้กล่องเหมือนเดิมเสมอ)
+                        local cx = (tl.X + tr.X) / 2
+                        local box_top_y, box_bot_y = tl.Y, br.Y
+                        local box_left_x, box_right_x = tl.X, br.X
+
+                        -- [หมุนกล่อง] เลื่อนสไลเดอร์แล้วกล่องหมุนรอบจุดกึ่งกลางจริง ๆ (เดิมหมุนไล่สีบน UIStroke ซึ่ง REAL ไม่วาด)
+                        local rot = settings.box_rotation
+                        if rot ~= 0 then
+                                local cy = (tl.Y + br.Y) / 2
+                                local rad = math.rad(rot)
+                                local cosr, sinr = math.cos(rad), math.sin(rad)
+                                tl = _Vector2new(cx + (tl.X - cx) * cosr - (tl.Y - cy) * sinr, cy + (tl.X - cx) * sinr + (tl.Y - cy) * cosr)
+                                tr = _Vector2new(cx + (tr.X - cx) * cosr - (tr.Y - cy) * sinr, cy + (tr.X - cx) * sinr + (tr.Y - cy) * cosr)
+                                br = _Vector2new(cx + (br.X - cx) * cosr - (br.Y - cy) * sinr, cy + (br.X - cx) * sinr + (br.Y - cy) * cosr)
+                                bl = _Vector2new(cx + (bl.X - cx) * cosr - (bl.Y - cy) * sinr, cy + (bl.X - cx) * sinr + (bl.Y - cy) * cosr)
                         end
 
-                        do
-                                if settings.distance then
-                                        -- [FPS fix] เดิมต่อข้อความใหม่+เขียนลง UI ทุกเฟรม - ทำเฉพาะตอนเลขเมตรเปลี่ยน
-                                        local dist_m = mathround(humanoid_distance / 3)
-                                        if dist_m ~= last_dist_m then
-                                                last_dist_m = dist_m
-                                                main_distance.Text = dist_m .. "m"
-                                        end
+                        if settings.box then
+                                local box_col = (vis_state_cache == true) and settings.box_visible_color or settings.box_color
+                                setLineFrame(box_lines[1], tl, tr, box_col[1], 1)
+                                setLineFrame(box_lines[2], tr, br, box_col[1], 1)
+                                setLineFrame(box_lines[3], br, bl, box_col[1], 1)
+                                setLineFrame(box_lines[4], bl, tl, box_col[1], 1)
+                                for _, ln in pairs(box_lines) do
+                                        ln.BackgroundTransparency = box_col[3]
                                 end
-                                if weapon_enabled then
-                                        local gun = is_npc and "???" or get_gun(plr_instance, character, humanoid)
-                                        local dv = main_distance.Visible
-                                        if gun then
-                                                if gun ~= last_gun or dv ~= last_gun_dv then
-                                                        last_gun, last_gun_dv = gun, dv
-                                                        main_weapon.Text = gun
-                                                        main_weapon.Position = dv and UDim2.new(0.5, 0, 1, 14) or UDim2.new(0.5, 0, 1, 1)
-                                                        main_weapon.Visible = true
+                        else
+                                for _, ln in pairs(box_lines) do ln.Visible = false end
+                        end
+
+                        if settings.box_outline then
+                                local ocol = settings.box_outline_color
+                                local otl, otr, obr, obl = rectCorners(tl, tr, br, bl, 2)
+                                setLineFrame(outline_out[1], otl, otr, ocol[1], 1)
+                                setLineFrame(outline_out[2], otr, obr, ocol[1], 1)
+                                setLineFrame(outline_out[3], obr, obl, ocol[1], 1)
+                                setLineFrame(outline_out[4], obl, otl, ocol[1], 1)
+                                for _, ln in pairs(outline_out) do
+                                        ln.BackgroundColor3 = ocol[1]
+                                        ln.BackgroundTransparency = ocol[2]
+                                end
+                                local itl, itr, ibr, ibl = rectCorners(tl, tr, br, bl, -2)
+                                setLineFrame(outline_in[1], itl, itr, ocol[3], 1)
+                                setLineFrame(outline_in[2], itr, ibr, ocol[3], 1)
+                                setLineFrame(outline_in[3], ibr, ibl, ocol[3], 1)
+                                setLineFrame(outline_in[4], ibl, itl, ocol[3], 1)
+                                for _, ln in pairs(outline_in) do
+                                        ln.BackgroundColor3 = ocol[3]
+                                        ln.BackgroundTransparency = ocol[4]
+                                end
+                        else
+                                for _, ln in pairs(outline_out) do ln.Visible = false end
+                                for _, ln in pairs(outline_in) do ln.Visible = false end
+                        end
+
+                        if settings.skeleton then
+                                local srate = main_settings.skeleton_rate
+                                if srate == nil or srate <= 0 then srate = 1e-10 end
+                                if skeleton_tick > srate then
+                                        skeleton_tick = skeleton_tick % srate
+                                        local bones = (character:FindFirstChild("Torso") and not character:FindFirstChild("UpperTorso")) and r6Bones or r15Bones
+                                        local scol = settings.skeleton_color[1]
+                                        local salpha = settings.skeleton_color[2]
+                                        for i, bone in ipairs(bones) do
+                                                local f1 = skel_lines[i]
+                                                local p1 = character:FindFirstChild(bone[1])
+                                                local p2 = character:FindFirstChild(bone[2])
+                                                if p1 and p2 and f1 then
+                                                        local s1, o1 = _WorldToViewportPoint(Camera, p1.Position)
+                                                        local s2, o2 = _WorldToViewportPoint(Camera, p2.Position)
+                                                        if o1 and o2 then
+                                                                setLineFrame(f1, _Vector2new(s1.X, s1.Y), _Vector2new(s2.X, s2.Y), scol, 1)
+                                                                f1.BackgroundTransparency = salpha
+                                                        else
+                                                                f1.Visible = false
+                                                        end
+                                                elseif f1 then
+                                                        f1.Visible = false
                                                 end
-                                        elseif last_gun ~= false then
-                                                last_gun = false
-                                                main_weapon.Visible = false
+                                        end
+                                        for i = #bones + 1, #skel_lines do
+                                                skel_lines[i].Visible = false
                                         end
                                 end
+                        else
+                                for _, ln in pairs(skel_lines) do ln.Visible = false end
                         end
 
-                        if settings.health_text or settings.health_bar then
-                                -- [FPS fix] เดิมเขียนขนาดหลอดเลือดทุกเฟรมทั้งที่เลือดนิ่ง - เขียนเฉพาะตอนสัดส่วนเปลี่ยน
-                                local hscale = 1 - humanoid_health / humanoid_max_health
-                                if hscale ~= last_health_scale then
-                                        last_health_scale = hscale
-                                        main_health_bar.Size = UDim2.fromScale(1, hscale)
-                                end
+                        if settings.health_bar then
+                                local pct = math.clamp(humanoid_health / humanoid_max_health, 0, 1)
+                                local hcol = settings.health_bar_color
+                                local bx = box_left_x - 5
+                                setLineFrame(health_bg, _Vector2new(bx, box_top_y), _Vector2new(bx, box_bot_y), Color3.new(0, 0, 0), 2)
+                                setLineFrame(health_bar, _Vector2new(bx, box_bot_y - (box_bot_y - box_top_y) * pct), _Vector2new(bx, box_bot_y), hcol[1]:Lerp(hcol[2], 1 - pct), 2)
+                        else
+                                health_bg.Visible = false
+                                health_bar.Visible = false
                         end
+
                         if settings.health_text then
+                                local pct = math.clamp(humanoid_health / humanoid_max_health, 0, 1)
                                 local hp_now = mathfloor(humanoid_health)
                                 if hp_now ~= last_health_int then
                                         last_health_int = hp_now
                                         main_health_text.Text = tostring(hp_now)
                                 end
+                                main_health_text.Position = UDim2.fromOffset(box_left_x - 9, box_bot_y - (box_bot_y - box_top_y) * pct)
+                                main_health_text.TextColor3 = settings.health_text_color[1]
+                                main_health_text.TextTransparency = settings.health_text_color[2]
+                                main_health_text.Visible = true
+                        else
+                                main_health_text.Visible = false
                         end
 
-                        -- [ESP perf] คำนวณ flags เฉพาะตอนเปิด Flags (เดิมยิง callback ทุกอันทุกเฟรมทั้งที่ปิด)
+                        if settings.name then
+                                main_name.Text = plr_instance.Name
+                                main_name.Position = UDim2.fromOffset(cx, box_top_y - 12)
+                                main_name.TextColor3 = settings.name_color[1]
+                                main_name.TextTransparency = settings.name_color[2]
+                                main_name.Visible = true
+                        else
+                                main_name.Visible = false
+                        end
+
+                        if settings.distance then
+                                local dist_m = mathround(humanoid_distance / 3)
+                                if dist_m ~= last_dist_m then
+                                        last_dist_m = dist_m
+                                        main_distance.Text = dist_m .. "m"
+                                end
+                                local dcol = settings.distance_color or settings.dist_color
+                                main_distance.Position = UDim2.fromOffset(cx, box_bot_y + 12)
+                                main_distance.TextColor3 = dcol[1]
+                                main_distance.TextTransparency = dcol[2]
+                                main_distance.Visible = true
+                        else
+                                main_distance.Visible = false
+                        end
+
+                        if settings.weapon then
+                                local gun = is_npc and "???" or get_gun(plr_instance, character, humanoid)
+                                local dv = main_distance.Visible
+                                if gun then
+                                        if gun ~= last_gun or dv ~= last_gun_dv then
+                                                last_gun, last_gun_dv = gun, dv
+                                                main_weapon.Text = gun
+                                        end
+                                        main_weapon.Position = UDim2.fromOffset(cx, box_bot_y + (dv and 28 or 14))
+                                        main_weapon.TextColor3 = settings.weapon_color[1]
+                                        main_weapon.TextTransparency = settings.weapon_color[2]
+                                        main_weapon.Visible = true
+                                else
+                                        if last_gun ~= false then
+                                                last_gun = false
+                                        end
+                                        main_weapon.Visible = false
+                                end
+                        else
+                                main_weapon.Visible = false
+                        end
+
                         if settings.flags then
-                                for i, v in registered_flags do
+                                flag_holder.Visible = true
+                                flag_holder.Position = UDim2.fromOffset(box_right_x + 3, box_top_y - 4)
+                                flag_holder.Size = UDim2.fromOffset(math.max(box_right_x - box_left_x, 0), math.max(box_bot_y - box_top_y, 0))
+                                for i, v in pairs(registered_flags) do
                                         local show_flag, flag_text = v[2](plr_instance, character, humanoid)
                                         local flag = flags_table[i]
-                                        if not show_flag then
+                                        if show_flag then
+                                                flag.Visible = true
+                                                if flag_text then flag.Text = flag_text end
+                                        else
                                                 flag.Visible = false
-                                                continue
                                         end
-                                        flag.Visible = true
-                                        if flag_text then flag.Text = flag_text end
                                 end
-                        end
-
-                        if not is_helicopter and update_skeleton and skeleton_tick > skeleton_rate then
-                                skeleton_tick = skeleton_tick % skeleton_rate
-                                main_wireframe:Clear()
-                                local root_pos = root.CFrame
-                                main_wireframe.Adornee = root
-
-                                local points = table.create(15 * 2)
-                                local counter = 0
-
-                                for part_name, info in cache do
-                                        local parent_part = skeleton_order[part_name]
-                                        local parent_info = parent_part and cache[parent_part]
-                                        if not (parent_info) then
-                                                continue
-                                        end
-
-                                        local part_pos, parent_pos = info[1], parent_info[1]
-
-                                        points[counter + 1] = _VectorToObjectSpace(root_pos, part_pos.Position - root_pos.Position)
-                                        points[counter + 2] = _VectorToObjectSpace(root_pos, parent_pos.Position - root_pos.Position)
-
-                                        counter += 2
-                                end
-
-                                main_wireframe:AddLines(points)
                         end
                 end
 
@@ -6858,6 +7120,20 @@ LPH_NO_VIRTUALIZE(function()
         end
 
         cheat.EspLibrary = esp_table
+
+        -- [Real fix v2] กันสายเรียก EspLibrary.load() ท้ายไฟล์ไม่ถูกรัน (ถ้า init ของสคริปต์พังก่อนถึงบรรทัดนั้น
+        -- ESP จะไม่มีวันโหลด = เมนูขึ้นแต่กล่อง/ชื่อ/เลือด/วง FOV ไม่ขึ้นเลย)
+        -- ระบบนี้ลองโหลดซ้ำทุก 3 วิ สูงสุด 10 ครั้ง ถ้าโหลดสำเร็จ (หรือสายปกติโหลดก่อนแล้ว) จะหยุดเอง ไม่กระทบอะไร
+        task.spawn(function()
+                local tries = 0
+                while tries < 10 and not esp_table.__loaded do
+                        tries = tries + 1
+                        task.wait(3)
+                        pcall(function()
+                                esp_table.load()
+                        end)
+                end
+        end)
 end)();
 LPH_NO_VIRTUALIZE(function()
         local camera = workspace.CurrentCamera
@@ -14104,7 +14380,32 @@ do
                 do
                         -- anchored to its bottom edge: the panel always grows upward from the bottom of the screen
                         local inventory_holder = Instance.new("Frame")
-                        inventory_holder.Parent = game:GetService("CoreGui").RobloxGui
+                        do
+                                (function()
+                                        -- [Real fix] เดิม Parent ตรงเข้า CoreGui.RobloxGui - ตัวรันบางตัว (เช่น REAL) เข้าถึงไม่ได้
+                                        -- แผง Inventory viewer เลยหาย/สคริปต์สะดุด - ลองหลายทางเหมือนกับที่แก้ ESP container
+                                        local ok_rbx, RobloxGui = pcall(function()
+                                                return game:GetService("CoreGui"):FindFirstChild("RobloxGui")
+                                        end)
+                                        if ok_rbx and RobloxGui then
+                                                pcall(function()
+                                                        inventory_holder.Parent = RobloxGui
+                                                end)
+                                        end
+                                        if not inventory_holder.Parent then
+                                                pcall(function()
+                                                        local ok_hui, hui = pcall(function()
+                                                                return gethui and gethui() or nil
+                                                        end)
+                                                        local gui = Instance.new("ScreenGui")
+                                                        gui.Name = "Folder"
+                                                        gui.ResetOnSpawn = false
+                                                        gui.Parent = (ok_hui and hui) or game:GetService("CoreGui")
+                                                        inventory_holder.Parent = gui
+                                                end)
+                                        end
+                                end)()
+                        end
                         inventory_holder.BackgroundTransparency = 1
                         inventory_holder.BorderSizePixel = 0
                         inventory_holder.AnchorPoint = Vector2.new(0, 1)
@@ -15704,7 +16005,7 @@ do
                 ZIndex = 1
         })
         local CircleInline = cheat.utility.new_drawing("Circle", {
-                Transparency = 1,
+                Transparency = 0, -- [Real fix v3] เดิม = 1 (โปร่งจนมองไม่เห็น) ตัวรันเก่าไม่สน Transparency เลยเห็นวง แต่ REAL ใช้ค่าจริง = วงหาย
                 Thickness = 1,
                 ZIndex = 2
         })
@@ -18230,7 +18531,32 @@ do
         do
                 do
                         local indicator_holder = Instance.new("Frame")
-                        indicator_holder.Parent = game:GetService("CoreGui").RobloxGui
+                        do
+                                (function()
+                                        -- [Real fix] เดิม Parent ตรงเข้า CoreGui.RobloxGui - ตัวรันบางตัว (เช่น REAL) เข้าถึงไม่ได้
+                                        -- แผงอินดิเคเตอร์เลยหาย/สคริปต์สะดุด - ลองหลายทางเหมือนกับที่แก้ ESP container
+                                        local ok_rbx, RobloxGui = pcall(function()
+                                                return game:GetService("CoreGui"):FindFirstChild("RobloxGui")
+                                        end)
+                                        if ok_rbx and RobloxGui then
+                                                pcall(function()
+                                                        indicator_holder.Parent = RobloxGui
+                                                end)
+                                        end
+                                        if not indicator_holder.Parent then
+                                                pcall(function()
+                                                        local ok_hui, hui = pcall(function()
+                                                                return gethui and gethui() or nil
+                                                        end)
+                                                        local gui = Instance.new("ScreenGui")
+                                                        gui.Name = "Folder"
+                                                        gui.ResetOnSpawn = false
+                                                        gui.Parent = (ok_hui and hui) or game:GetService("CoreGui")
+                                                        indicator_holder.Parent = gui
+                                                end)
+                                        end
+                                end)()
+                        end
                         indicator_holder.BackgroundTransparency = 1
                         indicator_holder.BorderSizePixel = 0
                         indicator_holder.Position = UDim2.new(0, -GuiInset.X, 0, -GuiInset.Y)
