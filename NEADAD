@@ -68,6 +68,14 @@
 --  (4) เฝ้าคุ้มหลังโผล่เปลี่ยนเป็น "รอบเดียวจบ" (เดิมดีดสวนทุกเฟรมนาน 1 วิ = ตีกับเกมจนเด้งลอย)
 --  (5) FPS: ตอน anchor ตัด re-assert โพส/velocity 2 จุดต่อเฟรม + ตัดซิงค์ WalkSpeed ทิ้งหมด
 --  (เซิร์ฟเวอร์ไม่เห็นการเดินอยู่แล้ว ไม่ต้องซิงค์) เหลือคง flag anti-hit ทุก 0.25 วิ อย่างเดียว
+--  Port ฟังชั่นจากสคริปต์ 1 (v46): ยกฟังชั่นตามรูปที่ส่งมาจากสคริปต์ 1 ใส่ MUZER HUB ทั้งหมด -
+--  หน้า มูฟเม้น > Custom desync: ปุ่ม Enabled พร้อม keybind [B] + Visualize desync (วาดกรอบตัวลอยตำแหน่งที่เซิร์ฟมองเห็น เปลี่ยนสีได้)
+--  + สไลเดอร์ X/Y/Z offset + X/Y/Z rotate (ปรับตำแหน่ง/หมุนตัวที่เซิร์ฟเห็น) - เอมบอทยิงจากจุดที่เซิร์ฟมองเห็นจริงเหมือนต้นฉบับ
+--  หน้า มูฟเม้น > เช็คเซิร์ฟ: Report notifications (แจ้งเตือนทันทีเมื่อโดนรีพอร์ต + จำนวนรวม) + ปุ่ม Show current Reports
+--  + ปุ่ม Diag (พิมพ์ข้อมูลแมพ/ไอเทม/รีโมตลงคอนโซลไว้ไล่บั๊ก) + Moderator checker (เช็คทีมงานตามรายชื่อ แจ้งเตือนซ้ำ 3 ครั้ง)
+--  + 0/0 stat detector (จับคนสถิติ 0 Kill / 0 Death ยืนยันก่อนแจ้ง 12 วิ) + ปุ่ม Check server now (สรุปเฉพาะหน้า) -
+--  toast แจ้งเตือนโผล่มุมขวาล่างจอเหมือนต้นฉบับทุกอย่าง (คลิกที่ข้อความเพื่อปิดได้)
+--  Desync hook fix (v47): แก้ Custom desync ปรับสไลเดอร์แล้วตัวขยับไปทั้งตัว แต่กรอบสีขาวไม่ขยับ - ต้นฉบับ (สคริปต์ 1) มี hook __index ดักการอ่าน CFrame ของ HumanoidRootPart/Head เอาไว้ ตอน desync เปิดอยู่ โค้ดฝั่งเกม (เช่น CharacterController) อ่านตำแหน่งเราจะได้ตำแหน่งจริงเสมอ ไม่เห็นตำแหน่งปลอมที่สคริปต์เขียนลงตัวชั่วคราวเพื่อส่งให้เซิร์ฟเห็น -ตอนพอร์ตมา MUZER hook นี้หายไป เกมเลยอ่านเจอตำแหน่งปลอมแล้วยกตัวมองเห็นทั้งตัวไปอยู่จุดที่เซิร์ฟเห็น ทั้งที่ควรนิ่ง -แก้แล้ว: เพิ่ม hook __index แบบเดียวกับต้นฉบับเข้าไปในบล็อก Custom desync ผลคือเหมือนต้นฉบับ: ตัวจริงนิ่ง ขยับแค่กรอบสีขาว (Visualize desync) ตาม X/Y/Z offset + X/Y/Z rotate
 ]]
 --!native
 --!optimize 2
@@ -7956,6 +7964,8 @@ ui.subtabs = {
         settings_main = ui.tabs.settings:SubTab({Name = "หลัก"}),
         settings_theme = ui.tabs.settings:SubTab({Name = "ธีม"}),
         movement_main = ui.tabs.movement:SubTab({Name = "หลัก"}),
+        movement_desync = ui.tabs.movement:SubTab({Name = "Custom desync"}),
+        movement_server = ui.tabs.movement:SubTab({Name = "เช็คเซิร์ฟ"}),
         skins_changer = ui.tabs.skins:SubTab({Name = "เลือกสกิน"}),
         skins_weapon = ui.tabs.skins:SubTab({Name = "เลือกของแต่ง"}),
         skins_crosshairs = ui.tabs.skins:SubTab({Name = "เป้าเล็ง 24 แบบ"})
@@ -7989,7 +7999,10 @@ ui.sections = {
         crosshairs_grid = ui.subtabs.skins_crosshairs:Section({Name = "รูปแบบเป้าเล็ง", Side = "Left"}),
         crosshairs_info = ui.subtabs.skins_crosshairs:Section({Name = "ข้อมูล", Side = "Right"}),
 
-        movement_main = ui.subtabs.movement_main:Section({Name = "มูฟเม้น", Side = "Left"})
+        movement_main = ui.subtabs.movement_main:Section({Name = "มูฟเม้น", Side = "Left"}),
+
+        custom_desync = ui.subtabs.movement_desync:Section({Name = "Custom desync", Side = "Left"}),
+        server_checker = ui.subtabs.movement_server:Section({Name = "เช็คเซิร์ฟ", Side = "Left"})
 }
 
 -- ════════════════════════════════════════════════════════════
@@ -19452,4 +19465,735 @@ do
                         end
                 end
         end)
+end
+
+-- ════════════════════════════════════════════════════════════
+--  [PORT] ดึงฟังชั่นจากสคริปต์ 1 ตามรูปที่ส่งมา มาใส่ MUZER HUB
+--  หน้า Custom desync: Enabled [B] + Visualize desync + สไลเดอร์ X/Y/Z offset + X/Y/Z rotate
+--  หน้า เช็คเซิร์ฟ: Report notifications + Show current Reports + Diag
+--                  + Moderator checker + 0/0 stat detector + Check server now
+--  (ยกโค้ดจากสคริปต์ 1 มาเหมือนเดิมทุกอย่าง แก้แค่ผูก section เข้ากับหน้าเมนูของ MUZER)
+-- ════════════════════════════════════════════════════════════
+
+-- ─────────────── Custom desync (พอร์ตจากสคริปต์ 1) ───────────────
+do
+        local dscsec = ui.sections.custom_desync
+
+        local desync_visualize = false
+        local desync_x_offset, desync_y_offset, desync_z_offset = 0, 0, 0
+        local desync_x_rotate, desync_y_rotate, desync_z_rotate = 0, 0, 0
+        local desync_random_rotation, desync_random_position = false, false
+        local desync_random_position_range = 5
+
+        local desync_velocity = false
+        local desync_velocity_x, desync_velocity_y, desync_velocity_z = 0, 0, 0
+
+        local desync_enabled, desync_enabled_key = false, false
+        local character, humanoid, hrp, head
+        local old_cframe, old_velocity, forced_cframe
+        local mathrandom = math.random
+
+        -- [Desync fix v47] เอา hook __index จากสคริปต์ 1 ต้นฉบับมาใส่ (ตอนพอร์ตไม่ได้เอามาด้วย เลยเกิดบั๊กตัวขยับไปทั้งตัวแทนที่จะขยับแค่กรอบขาว)
+        -- เกม (โค้ดฝั่งเกม เช่น CharacterController) อ่าน CFrame ของ HumanoidRootPart/Head ตอน desync เปิดอยู่
+        -- จะได้ตำแหน่งจริง (old_cframe) กลับไปเสมอ ไม่เห็นตำแหน่งปลอมที่เขียนลงตัวชั่วคราวเพื่อส่งให้เซิร์ฟเห็น
+        local __index; __index = hookmetamethod(game, "__index", newcclosure(LPH_NO_VIRTUALIZE(function(self, key)
+                if checkcaller() then return __index(self, key) end
+                if key == 'CFrame' and (self == hrp or self == head) and desync_enabled and desync_enabled_key and old_cframe then
+                        if self == hrp then
+                                return old_cframe
+                        end
+                        if self == head then
+                                return old_cframe * _CFramenew(
+                                        0,
+                                        hrp.Size.Y / 2 + head.Size.Y / 2,
+                                        0
+                                ) or _CFramenew()
+                        end
+                end
+                return __index(self, key)
+        end)))
+
+        local main_wireframe = Instance.new("WireframeHandleAdornment")
+        main_wireframe.Parent = game:GetService("CoreGui"):FindFirstChild("RobloxGui") or game:GetService("CoreGui")
+        main_wireframe.Adornee = workspace
+        main_wireframe.Color3 = Color3.new(1, 1, 1)
+        main_wireframe.Transparency = 0
+        main_wireframe.AlwaysOnTop = true
+        main_wireframe.CFrame = CFrame.new()
+        main_wireframe.Scale = Vector3.one
+        main_wireframe.Thickness = 1
+        main_wireframe.AdornCullingMode = Enum.AdornCullingMode.Automatic
+
+                local ds_x_slider, ds_y_slider, ds_z_slider, ds_rx_slider, ds_ry_slider, ds_rz_slider = nil, nil, nil, nil, nil, nil
+                local ds_randr_toggle, ds_randp_toggle, ds_range_slider, ds_vel_toggle, ds_vx_slider, ds_vy_slider, ds_vz_slider, ds_vis_toggle = nil, nil, nil, nil, nil, nil, nil, nil
+                local ds_keybind; ds_keybind = dscsec:Toggle({Name = "Enabled", Value = false, Flag = "desync_enabled", Callback = function(bool)
+                        desync_enabled = bool
+                        local vis = bool and true or false
+                        if ds_x_slider then ds_x_slider.State(vis) end
+                        if ds_y_slider then ds_y_slider.State(vis) end
+                        if ds_z_slider then ds_z_slider.State(vis) end
+                        if ds_rx_slider then ds_rx_slider.State(vis) end
+                        if ds_ry_slider then ds_ry_slider.State(vis) end
+                        if ds_rz_slider then ds_rz_slider.State(vis) end
+                        if ds_randr_toggle then ds_randr_toggle.State(vis) end
+                        if ds_randp_toggle then ds_randp_toggle.State(vis) end
+                        if ds_range_slider then ds_range_slider.State(vis) end
+                        if ds_vel_toggle then ds_vel_toggle.State(vis) end
+                        if ds_vx_slider then ds_vx_slider.State(vis) end
+                        if ds_vy_slider then ds_vy_slider.State(vis) end
+                        if ds_vz_slider then ds_vz_slider.State(vis) end
+                        if ds_vis_toggle then ds_vis_toggle.State(vis) end
+                end}):Keybind({Name = "Desync", Mode = "Toggle", Key = Enum.KeyCode.B, Value = false, Flag = "desync_enabled_key", Link = "desync_enabled", Callback = function(bool)
+                        desync_enabled_key = desync_enabled and bool
+                        ds_keybind.Set(desync_enabled_key, true)
+                end})
+                ds_vis_toggle = dscsec:Toggle({Name = "Visualize desync", Value = false, Flag = "desync_visualize", Callback = function(bool)
+                        desync_visualize = bool
+                end})
+                ds_vis_toggle:Colorpicker({Name = "Visualization color", Value = Color3.new(1, 1, 1), Usealpha = true, Flag = "desync_visualize_color", Callback = function(color)
+                        main_wireframe.Color3 = color.c
+                        main_wireframe.Transparency = color.a
+                end})
+                ds_vis_toggle.State(false)
+
+                ds_x_slider = dscsec:Slider({Name = "X offset", Min = -10, Max = 10, Float = 0.1, Value = 0, Flag = "desync_x_offset", Callback = function(int)
+                        desync_x_offset = int
+                end})
+                ds_x_slider.State(false)
+                ds_y_slider = dscsec:Slider({Name = "Y offset", Min = -10, Max = 10, Float = 0.1, Value = 0, Flag = "desync_y_offset", Callback = function(int)
+                        desync_y_offset = int
+                end})
+                ds_y_slider.State(false)
+                ds_z_slider = dscsec:Slider({Name = "Z offset", Min = -10, Max = 10, Float = 0.1, Value = 0, Flag = "desync_z_offset", Callback = function(int)
+                        desync_z_offset = int
+                end})
+                ds_z_slider.State(false)
+
+                ds_rx_slider = dscsec:Slider({Name = "X rotate", Min = 0, Max = 20, Float = 0.1, Value = 0, Flag = "desync_x_rotate", Callback = function(int)
+                        desync_x_rotate = math.rad(int * 18)
+                end})
+                ds_rx_slider.State(false)
+                ds_ry_slider = dscsec:Slider({Name = "Y rotate", Min = 0, Max = 20, Float = 0.1, Value = 0, Flag = "desync_y_rotate", Callback = function(int)
+                        desync_y_rotate = math.rad(int * 18)
+                end})
+                ds_ry_slider.State(false)
+                ds_rz_slider = dscsec:Slider({Name = "Z rotate", Min = 0, Max = 20, Float = 0.1, Value = 0, Flag = "desync_z_rotate", Callback = function(int)
+                        desync_z_rotate = math.rad(int * 18)
+                end})
+                ds_rz_slider.State(false)
+
+        RunService.Heartbeat:Connect(LPH_NO_VIRTUALIZE(function()
+                replicated_hrp_cframe = nil
+
+                character = LocalPlayer.Character
+                if not character then return end
+                humanoid = _FindFirstChildOfClass(character, "Humanoid")
+                hrp = _FindFirstChild(character, "HumanoidRootPart")
+                head = _FindFirstChild(character, "Head")
+
+                if not (humanoid and hrp) then return end
+                if not (desync_enabled and desync_enabled_key) then return end
+
+                old_cframe = hrp.CFrame
+                old_velocity = hrp.AssemblyLinearVelocity
+
+                local hrp_offset = _CFramenew()
+
+                if not (forced_cframe) then
+                        hrp_offset = _CFramenew(
+                                desync_x_offset,
+                                desync_y_offset,
+                                desync_z_offset
+                        ) * CFrame.Angles(
+                                desync_x_rotate,
+                                desync_y_rotate,
+                                desync_z_rotate
+                        )
+                        if desync_random_position then
+                                hrp_offset = hrp_offset + (
+                                        CFrame.Angles(
+                                                (mathrandom() - mathrandom()) * 2 * math.pi,
+                                                (mathrandom() - mathrandom()) * 2 * math.pi,
+                                                (mathrandom() - mathrandom()) * 2 * math.pi
+                                        ) * CFrame.new(0, 0, -desync_random_position_range)
+                                ).Position
+                        end
+                        if desync_random_rotation then
+                                hrp_offset = hrp_offset * CFrame.Angles(
+                                        (mathrandom() - mathrandom()) * 2 * math.pi,
+                                        (mathrandom() - mathrandom()) * 2 * math.pi,
+                                        (mathrandom() - mathrandom()) * 2 * math.pi
+                                )
+                        end
+                end
+
+                replicated_hrp_cframe = forced_cframe or old_cframe * hrp_offset
+
+                hrp.CFrame = replicated_hrp_cframe
+
+                if desync_velocity then
+                        hrp.AssemblyLinearVelocity = _Vector3new(
+                                desync_velocity_x,
+                                desync_velocity_y,
+                                desync_velocity_z
+                        )
+                end
+
+                RunService.RenderStepped:Wait()
+                if not hrp then return end
+
+                hrp.CFrame = old_cframe
+                if desync_velocity then
+                        hrp.AssemblyLinearVelocity = old_velocity
+                end
+        end))
+
+        local VERTICES = {
+
+                _Vector3new(-1,-1,-1), _Vector3new(-1, 1,-1),
+                _Vector3new(-1, 1,-1), _Vector3new(-1, 1, 1),
+                _Vector3new(-1, 1, 1), _Vector3new(-1,-1, 1),
+                _Vector3new(-1,-1, 1), _Vector3new(-1,-1,-1),
+
+                _Vector3new( 1,-1,-1), _Vector3new( 1, 1,-1),
+                _Vector3new( 1, 1,-1), _Vector3new( 1, 1, 1),
+                _Vector3new( 1, 1, 1), _Vector3new( 1,-1, 1),
+                _Vector3new( 1,-1, 1), _Vector3new( 1,-1,-1),
+
+                _Vector3new(-1,-1,-1), _Vector3new( 1,-1,-1),
+                _Vector3new(-1, 1,-1), _Vector3new( 1, 1,-1),
+                _Vector3new(-1, 1, 1), _Vector3new( 1, 1, 1),
+                _Vector3new(-1,-1, 1), _Vector3new( 1,-1, 1),
+        }
+
+        local skeleton_order = {
+                ["LeftFoot"] = true,
+                ["LeftLowerLeg"] = true,
+                ["LeftUpperLeg"] = true,
+                ["RightFoot"] = true,
+                ["RightLowerLeg"] = true,
+                ["RightUpperLeg"] = true,
+                ["LeftHand"] = true,
+                ["LeftLowerArm"] = true,
+                ["LeftUpperArm"] = true,
+                ["RightHand"] = true,
+                ["RightLowerArm"] = true,
+                ["RightUpperArm"] = true,
+                ["LowerTorso"] = true,
+                ["UpperTorso"] = true
+        }
+
+        local valid_parts = {
+                ["LeftFoot"] = true,
+                ["LeftLowerLeg"] = true,
+                ["LeftUpperLeg"] = true,
+                ["RightFoot"] = true,
+                ["RightLowerLeg"] = true,
+                ["RightUpperLeg"] = true,
+                ["LeftHand"] = true,
+                ["LeftLowerArm"] = true,
+                ["LeftUpperArm"] = true,
+                ["RightHand"] = true,
+                ["RightLowerArm"] = true,
+                ["RightUpperArm"] = true,
+                ["LowerTorso"] = true,
+                ["UpperTorso"] = true,
+                ["Head"] = true
+        }
+
+        local function isBodyPart(name)
+                return valid_parts[name]
+        end
+
+        cheat.utility.new_renderstepped(LPH_NO_VIRTUALIZE(function(delta)
+                main_wireframe:Clear()
+
+                if not (desync_visualize) then return end
+                if not (desync_enabled and desync_enabled_key) then return end
+                if not (replicated_hrp_cframe) then return end
+
+                local character = LocalPlayer.Character
+                if not (character) then return end
+
+                local parts = table.create(15)
+                local c = 0
+                for _, v in character:GetChildren() do
+                        if _IsA(v, "BasePart") and isBodyPart(v.Name) then
+                                c += 1
+                                parts[c] = {v.CFrame, v.Size}
+                        end
+                end
+                if c == 0 then return end
+
+                local points = table.create(24 * c)
+                c = 0
+                for _, part in parts do
+                        for _, vertex in VERTICES do
+                                c += 1
+                                points[c] = (replicated_hrp_cframe):PointToWorldSpace(
+                                        old_cframe:PointToObjectSpace(part[1]:PointToWorldSpace(vertex * part[2] * 0.5))
+                                ) - workspace.WorldPivot.Position
+                        end
+                end
+
+                main_wireframe:AddLines(points)
+        end))
+
+end
+
+-- ─────────────── เช็คเซิร์ฟ + รายงาน (พอร์ตจากสคริปต์ 1) ───────────────
+do
+        local serversec = ui.sections.server_checker
+
+        serversec:Toggle({Name = "Report notifications", Value = false, Flag = "misc_report_notifications", Callback = function(bool)
+                cheat.report_notifications = bool
+        end})
+        serversec:Button({Name = "Show current Reports", Callback = function()
+                local folder = game:GetService("ReplicatedStorage"):FindFirstChild("Players")
+                local data = folder and folder:FindFirstChild(LocalPlayer.Name)
+                local status = data and data:FindFirstChild("Status")
+                local uac = status and status:FindFirstChild("UAC")
+                local reports = uac and uac:FindFirstChild("Reports")
+                local total = reports and reports:GetAttribute("1") or 0
+                Library.Notification("You currently have " .. tostring(total) .. " report(s)", 4)
+        end})
+        cheat.report_notifications = false
+        local report_last_total = nil
+        local function report_total()
+                local folder = game:GetService("ReplicatedStorage"):FindFirstChild("Players")
+                local data = folder and folder:FindFirstChild(LocalPlayer.Name)
+                local status = data and data:FindFirstChild("Status")
+                local uac = status and status:FindFirstChild("UAC")
+                local reps = uac and uac:FindFirstChild("Reports")
+                if not reps then return 0 end
+                local n = 0
+                for _, v in reps:GetAttributes() do
+                        if typeof(v) == "number" then
+                                n += v
+                        end
+                end
+                return n
+        end
+        task.spawn(function()
+                while task.wait(0.5) do
+                        if cheat.report_notifications then
+                                local total = report_total()
+                                if report_last_total == nil then
+                                        report_last_total = total
+                                elseif total > report_last_total then
+                                        Library.Notification("You were reported! (+" .. (total - report_last_total) .. " report(s), Total: " .. total .. ")", 7)
+                                        report_last_total = total
+                                elseif total < report_last_total then
+                                        report_last_total = total
+                                end
+                        end
+                end
+        end)
+        local recent_folder = game:GetService("ReplicatedStorage"):FindFirstChild("ReportList")
+        recent_folder = recent_folder and recent_folder:FindFirstChild("Recent")
+        if recent_folder then
+                recent_folder.ChildAdded:Connect(function(child)
+                        if cheat.report_notifications then
+                                local name = child.Name:match("(.+)_([^_]+)$")
+                                if name == LocalPlayer.Name then
+                                        Library.Notification("Added to Recent Reports list!", 7)
+                                end
+                        end
+                end)
+        end
+
+        serversec:Button({Name = "Diag", Callback = function()
+                local out = {}
+                local itemslist = game:GetService("ReplicatedStorage"):FindFirstChild("ItemsList")
+                if itemslist then
+                        local names = {}
+                        for _, item in itemslist:GetChildren() do
+                                names[#names + 1] = item.Name .. " (" .. item.ClassName .. ")"
+                                if #names >= 60 then
+                                        break
+                                end
+                        end
+                        out[#out + 1] = "items=" .. table.concat(names, "|")
+                else
+                        out[#out + 1] = "items=none"
+                end
+                local roots = {
+                        workspace:FindFirstChild("AiZones"),
+                        workspace:FindFirstChild("NoCollision") and workspace.NoCollision:FindFirstChild("AiZones")
+                }
+                for _, root in roots do
+                        if root then
+                                local found = {}
+                                for _, f in root:GetChildren() do
+                                        found[#found + 1] = f.Name .. "x" .. #f:GetChildren()
+                                        if #found >= 25 then
+                                                break
+                                        end
+                                end
+                                out[#out + 1] = "root=" .. root:GetFullName() .. " folders=" .. table.concat(found, "|")
+                        end
+                end
+                local rems = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+                out[#out + 1] = "trap=" .. tostring(rems and rems:FindFirstChild("Trap") ~= nil)
+                local data = project_delta.local_game_data
+                local inv = data and data:FindFirstChild("Inventory")
+                if inv then
+                        local conts = {}
+                        for _, c in inv:GetChildren() do
+                                local inner = c:FindFirstChild("Inventory")
+                                local n = 0
+                                if inner then
+                                        n = #inner:GetChildren()
+                                end
+                                conts[#conts + 1] = c.Name .. "x" .. n
+                        end
+                        out[#out + 1] = "containers=" .. table.concat(conts, "|")
+                else
+                        out[#out + 1] = "containers=none"
+                end
+                for _, line in out do
+                        print("[diag] " .. line)
+                end
+                Library.Notification("diag printed", 3)
+        end})
+
+        -- =====================================================================
+        -- Player checker: name list (file 2) + 0/0 stat alerts
+        -- Toast notifications are shown at the bottom-right edge of the screen
+        -- =====================================================================
+        -- ===== CONFIG : แก้ดีเลย์ (delay) ของ Name checker ได้ตรงนี้ =====
+        local CHECKER_SCAN_DELAY = 5    -- สแกนเช็คเซิฟทุก 5 วินาที
+        local CHECKER_ALERT_REPEATS = 3 -- แจ้งเตือนซ้ำ 3 ครั้ง
+        local CHECKER_ALERT_EVERY = 5   -- ครั้งละ 5 วินาที (3 ครั้ง = 15 วินาที)
+        local ZERO_CONFIRM_TIME = 12    -- ยืนยันก่อนแจ้งเตือนคน 0 Kill / 0 Death (วินาที)
+        -- ================================================================
+        local check_names = {
+                "Mamkin_perotexnik", "rrwwrggrgwr", "Maxikinz", "zDjvbcrd", "dyls_x", "deduct0re",
+                "retrysuk", "ZETA_85", "FancyishFawn", "FlashAshSmash_Reborn", "jannu2010", "UnknownHD222",
+                "vixtorswordmaster", "EXPL0", "Duhacek1112", "hakaji", "DominikK7772", "RunexVikings",
+                "jacks188", "solter", "DartDekster", "AAbattery12344", "DeltaTest11", "Igor_qun",
+                "imseeingredrn", "EpsilonGreedy", "Dexo_ii", "MrGhosty1928", "RuebeHD2", "steretir32323",
+                "PhantomPro2056", "Aydan_1401", "orange_justin3", "markilino10", "ME_BAD90THS", "KBHGaming480",
+                "Gribler1", "Farlan9", "yuckey47", "Sparky_deeny", "Aidenkenkule13", "Juanthebeamer5000",
+                "Old_Shadowist", "AnkroRB", "mightyblast6", "playstoreapplestolen", "robloxparentverify", "Pixelized908",
+                "GentleArmann", "Mr_1Dumpling", "Poptartmainia", "ProfesionalPr0", "wasuphomie1745", "notgoodguyMichael",
+                "wantedcombat", "maasaavainnyaaaa", "PokuBitty", "RaphaGabrielYT", "ENZ0RBK", "kyfoh",
+                "DENIS74525", "DiamondRelic05", "masterdoggo09", "PhantomSkull437", "J_xrg", "Paviic",
+                "rr195356", "kkjjkkjjjkk", "Mr_epicgamer5", "GreenTheCorrupt", "uguigughjgkj1", "reecec345",
+                "khgygh222a", "highfive737", "Fr0ssyt", "Kevified", "EXP_L0", "Lightwolf_h1d1",
+                "diepie201", "SlendiiQ", "DigitalArchives", "notsamesss", "TurnedVile", "SOLO_LOLO",
+                "XuNuo201", "gprolikop", "Obviouslylethal", "OperatorNull0", "KolRstar", "imblu1",
+                "Rupert_Barrq", "IanEyeballs", "hoimeneer75", "snbibbes3", "joycloud", "kittensoldier7",
+                "SalvaVX", "e2equl", "SpO0Ks", "NATAN_133", "abtinchegk", "AlvinepChan",
+                "DozerDaddy", "immu_red", "ThatSprayThough", "LEMONFOXTROT", "ACCIDENTSHAPPEN", "KnifeUserTop1",
+                "50k_freshcash", "Nokky732", "xxkrod06xx", "syedaarish", "MANI124KING", "benjofullscreen666",
+                "gotcharinoes", "jenkinsman4", "f0hoc", "VOLODUMUR22", "ooferman_fade", "XChaosmasterXx50",
+                "Boomy234545", "NotReallyTeal", "dogelordmlgpro123", "ShadowCrossBinder", "Buzzixe", "gggshdjk",
+                "AtomsleyTheCoyote", "GonderDex", "crayzbaconpro998", "Government_ManGM", "lukejoseph210", "MKlargekarp",
+                "Da_ultimatefruitloop", "maybealian", "FabiusCaesar1", "wardog6543211", "Spenklers", "RazorHedgehog",
+                "Klra_man",
+        }
+        local name_lookup = { }
+        for _, name in ipairs(check_names) do
+                name_lookup[string.lower(name)] = true
+        end
+        
+
+        -- bottom-right toast holder (parented to the library popup gui, auto-cleaned on Unload)
+        local toast_holder = Utility.New("Frame", {
+                Name = "checker_toasts",
+                BackgroundTransparency = 1,
+                BorderColor3 = Color3.fromRGB(0, 0, 0),
+                BorderSizePixel = 0,
+                AnchorPoint = Vector2.new(1, 1),
+                Position = UDim2.new(1, -12, 1, -12),
+                Size = UDim2.new(0, 280, 1, -24),
+                Parent = Library.ScreenGuiPopups,
+        })
+
+        Utility.New("UIListLayout", {
+                Padding = UDim.new(0, 6),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                VerticalAlignment = Enum.VerticalAlignment.Bottom,
+                Parent = toast_holder,
+        })
+
+        local toast_order = 0
+        local toast_stack = { }
+
+        local function escape_rich(str)
+                str = tostring(str)
+                str = str:gsub("&", "&amp;")
+                str = str:gsub("<", "&lt;")
+                str = str:gsub(">", "&gt;")
+                return str
+        end
+
+        local function toast_remove(card)
+                if not card then
+                        return
+                end
+                for index = #toast_stack, 1, -1 do
+                        if toast_stack[index] == card then
+                                table.remove(toast_stack, index)
+                                break
+                        end
+                end
+                local holder = card.Parent
+                if holder then
+                        task.spawn(function()
+                                pcall(function()
+                                        Library.Tween(card, { Position = UDim2.new(1, 0, 0, 0) })
+                                end)
+                                task.wait(Library.TweenSpeed)
+                                pcall(function()
+                                        holder:Destroy()
+                                end)
+                        end)
+                end
+        end
+
+        local function push_toast(text, duration, accent)
+                if not toast_holder.Parent then
+                        return
+                end
+                toast_order = toast_order + 1
+
+                while #toast_stack >= 7 do
+                        toast_remove(toast_stack[1])
+                end
+
+                local holder = Utility.New("Frame", {
+                        Name = "toast_item",
+                        BackgroundTransparency = 1,
+                        BorderColor3 = Color3.fromRGB(0, 0, 0),
+                        BorderSizePixel = 0,
+                        AutomaticSize = Enum.AutomaticSize.XY,
+                        LayoutOrder = toast_order,
+                        Parent = toast_holder,
+                })
+
+                local card = Utility.New("TextButton", {
+                        Name = "toast_card",
+                        BackgroundColor3 = Color3.fromRGB(23, 25, 26),
+                        BackgroundTransparency = 0.4,
+                        BorderColor3 = Color3.fromRGB(0, 0, 0),
+                        BorderSizePixel = 0,
+                        AutomaticSize = Enum.AutomaticSize.Y,
+                        Position = UDim2.new(1, 0, 0, 0),
+                        Size = UDim2.new(0, 280, 0, 0),
+                        Parent = holder,
+                }, { BackgroundColor3 = "background" })
+
+                Utility.New("Frame", {
+                        Name = "accent",
+                        Position = UDim2.new(1, -2, 0, 0),
+                        Size = UDim2.new(0, 2, 1, 0),
+                        BackgroundColor3 = accent or Color3.fromRGB(220, 100, 100),
+                        BorderColor3 = Color3.fromRGB(0, 0, 0),
+                        BorderSizePixel = 0,
+                        Parent = card,
+                })
+
+                local label = Utility.New("TextLabel", {
+                        Name = "toast_text",
+                        FontFace = Font.fromEnum(Enum.Font.SourceSans),
+                        RichText = true,
+                        Text = text,
+                        TextColor3 = Color3.fromRGB(230, 230, 230),
+                        TextSize = 15,
+                        TextWrapped = true,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                        TextYAlignment = Enum.TextYAlignment.Top,
+                        BackgroundTransparency = 1,
+                        Position = UDim2.new(0, 8, 0, 0),
+                        Size = UDim2.new(1, -18, 0, 0),
+                        AutomaticSize = Enum.AutomaticSize.Y,
+                        Parent = card,
+                }, { TextColor3 = "text" })
+
+                Utility.New("UIPadding", {
+                        PaddingTop = UDim.new(0, 6),
+                        PaddingBottom = UDim.new(0, 6),
+                        Parent = label,
+                })
+
+                Utility.Signal(card.MouseButton1Click:Connect(function()
+                        toast_remove(card)
+                end))
+
+                table.insert(toast_stack, card)
+
+                task.spawn(function()
+                        if card.Parent then
+                                pcall(function()
+                                        Library.Tween(card, { Position = UDim2.new(0, 0, 0, 0) })
+                                end)
+                        end
+                end)
+
+                task.delay(duration or 8, function()
+                        toast_remove(card)
+                end)
+        end
+
+        -- แจ้งเตือนซ้ำ: 3 ครั้งใน 15 วินาที ครั้งละ 5 วินาที (ตามค่า CONFIG ด้านบน)
+        local function push_toast_repeat(text, accent)
+                task.spawn(function()
+                        for i = 1, CHECKER_ALERT_REPEATS do
+                                push_toast(text, CHECKER_ALERT_EVERY, accent)
+                                if i < CHECKER_ALERT_REPEATS then
+                                        task.wait(CHECKER_ALERT_EVERY)
+                                end
+                        end
+                end)
+        end
+        -- stats source (same path as the existing cheater detector)
+        local function get_player_stats(player)
+                local ok, stats = pcall(function()
+                        local folder = game:GetService("ReplicatedStorage"):FindFirstChild("Players")
+                        local data = folder and folder:FindFirstChild(player.Name)
+                        local status = data and data:FindFirstChild("Status")
+                        local journey = status and status:FindFirstChild("Journey")
+                        return journey and journey:FindFirstChild("Statistics") or nil
+                end)
+                if ok then
+                        return stats
+                end
+                return nil
+        end
+
+        local function read_stat(stats, ...)
+                local keys = { ... }
+                for _, key in ipairs(keys) do
+                        local value = stats:GetAttribute(key)
+                        if value ~= nil then
+                                return value
+                        end
+                end
+                return nil
+        end
+
+        local function is_zero_player(player)
+                local stats = get_player_stats(player)
+                if not stats then
+                        return false
+                end
+                local kills = read_stat(stats, "K_PVP", "Kills")
+                local deaths = read_stat(stats, "D_PVP", "Deaths")
+                if kills == nil or deaths == nil then
+                        return false
+                end
+                return kills == 0 and deaths == 0
+        end
+
+        local name_notified = { }
+        local zero_seen = { }
+        local zero_notified = { }
+        local checker_names_enabled = false
+        local checker_zero_enabled = false
+
+        Utility.Signal(Players.PlayerRemoving:Connect(function(player)
+                zero_seen[player] = nil
+                zero_notified[player] = nil
+                if name_notified[player] then
+                        name_notified[player] = nil
+                        if checker_names_enabled then
+                                push_toast("<b>" .. escape_rich(player.Name) .. "</b> Moderator leave Server", 8, Color3.fromRGB(160, 160, 160))
+                        end
+                end
+        end))
+
+        serversec:Toggle({ Name = "Moderator checker", Value = false, Flag = "checker_names", Callback = function(bool)
+                checker_names_enabled = bool
+                if not bool then
+                        table.clear(name_notified)
+                end
+        end })
+
+        serversec:Toggle({ Name = "0/0 stat detector", Value = false, Flag = "checker_zero_stats", Callback = function(bool)
+                checker_zero_enabled = bool
+                if not bool then
+                        table.clear(zero_seen)
+                        table.clear(zero_notified)
+                end
+        end })
+
+        serversec:Button({ Name = "Check server now", Callback = function()
+                local matches = { }
+                local zeros = { }
+                for _, player in ipairs(Players:GetPlayers()) do
+                        if player ~= LocalPlayer then
+                                if name_lookup[string.lower(tostring(player.Name))] then
+                                        table.insert(matches, tostring(player.Name))
+                                end
+                                if is_zero_player(player) then
+                                        table.insert(zeros, tostring(player.Name))
+                                end
+                        end
+                end
+                local function summarize(list)
+                        if #list == 0 then
+                                return "none"
+                        end
+                        local shown = { }
+                        for i = 1, math.min(#list, 8) do
+                                shown[#shown + 1] = list[i]
+                        end
+                        local text = table.concat(shown, ", ")
+                        if #list > 8 then
+                                text = text .. " (+" .. (#list - 8) .. ")"
+                        end
+                        return text
+                end
+                if #matches > 0 then
+                        push_toast(("Moderator %d คน: %s"):format(#matches, summarize(matches)), 10, Color3.fromRGB(220, 100, 100))
+                end
+                if #zeros > 0 then
+                        push_toast(("Statistics 0 Kill / 0 Death (K/D 0) %d คน: %s"):format(#zeros, summarize(zeros)), 10, Color3.fromRGB(230, 190, 80))
+                end
+                if #matches == 0 and #zeros == 0 then
+                        push_toast("Not found 0/0 In Servers", 6, Color3.fromRGB(160, 160, 160))
+                end
+        end })
+
+        local checker_tick = 0
+        cheat.utility.new_heartbeat(function()
+                if not toast_holder.Parent then
+                        return
+                end
+                if os.clock() - checker_tick < CHECKER_SCAN_DELAY then
+                        return
+                end
+                checker_tick = os.clock()
+                if not (checker_names_enabled or checker_zero_enabled) then
+                        return
+                end
+                pcall(function()
+                        for _, player in ipairs(Players:GetPlayers()) do
+                                if player ~= LocalPlayer then
+                                        if checker_names_enabled and not name_notified[player] then
+                                                if name_lookup[string.lower(tostring(player.Name))] then
+                                                        name_notified[player] = true
+                                                        push_toast_repeat(("Moderator: <b>%s</b> (%s)"):format(escape_rich(player.Name), escape_rich(tostring(player.DisplayName))), Color3.fromRGB(220, 100, 100))
+                                                end
+                                        end
+                                        if checker_zero_enabled and not zero_notified[player] then
+                                                if is_zero_player(player) then
+                                                        local first_seen = zero_seen[player]
+                                                        if not first_seen then
+                                                                zero_seen[player] = os.clock()
+                                                        elseif os.clock() - first_seen >= ZERO_CONFIRM_TIME then
+                                                                zero_notified[player] = true
+                                                                push_toast_repeat(("Statistics 0 Kill / 0 Death (K/D 0): <b>%s</b> (%s)"):format(escape_rich(player.Name), escape_rich(tostring(player.DisplayName))), Color3.fromRGB(230, 190, 80))
+                                                        end
+                                                else
+                                                        zero_seen[player] = nil
+                                                end
+                                        end
+                                end
+                        end
+                end)
+        end)
+
 end
