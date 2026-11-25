@@ -1,0 +1,438 @@
+-- ============================================================
+-- SILENT AIM (AiZones) + วง FOV บนจอ + ESP + ท้องฟ้าสว่าง
+-- เวอร์ชันมือถือ (Delta) : วาดด้วย GUI ล้วน ไม่แตะ API วาดภาพ (Drawing)
+--   - วง FOV กลางจอ ขนาดตามค่า z1.Fov ด้านล่าง (แก้ Radius ได้)
+--   - ESP แดง = ซอมบี้ใน AiZones / ฟ้า = ผู้เล่น พร้อมชื่อ+ระยะ+เลือด
+--   - ท้องฟ้าสว่าง (Fullbright) เห็นศัตรูในที่มืด/กลางคืน
+-- โค้ดฐานสายัมเก็บต้นฉบับไว้ตรง ๆ ส่วนเสริมอยู่ท้ายไฟล์ (หา -- [เพิ่ม])
+-- รันซ้ำต้องรีเข้าเกมก่อนทุกครั้ง (กัน hook ซ้อนกัน)
+-- ============================================================
+
+-- [[ Rscripts Risk Notice ]]
+-- This script is not verified by rscripts.net. Deal with caution.
+--
+-- Stay safe:
+--   • Never log in on unofficial Roblox sites or lookalike domains.
+--   • Real Roblox links use roblox.com (check the .com ending).
+--   • Treat fake Roblox login / "claim reward" pages as phishing.
+-- [[ End Rscripts Risk Notice ]]
+
+local v1 = game:GetService("RunService");
+local v2 = game:GetService("UserInputService");
+local v3 = game:GetService("ReplicatedStorage");
+local v4 = game:GetService("Players");
+
+local v5 = v4.LocalPlayer;
+local v6 = workspace.CurrentCamera;
+local v7 = workspace.AiZones;
+local v8, v9 = pcall(require, v3.Modules.FPS.Bullet);
+
+if not hookfunction then
+	return v5:Kick("Executor Doesn't Have hookfunction.");
+end;
+
+if not v8 then
+	return v5:Kick("Couldn't Require Bullet Module. Make Sure The Game Is Loaded");
+end;
+
+local z1 = {
+	Enabled = true,
+	WallCheck = true,
+	HitPart = "Head",
+	Prediction = true,
+	Fov = {
+		Visible = true, -- [แก้] เดิม false → เปิดให้วง FOV โผล่บนจอ (โค้ดวาดวงอยู่ท้ายไฟล์)
+		Radius = 600
+	}
+};
+
+local function z2(p1)
+	return p1 and p1.Character and p1.Character:FindFirstChild("HumanoidRootPart")
+		and p1.Character:FindFirstChild("Humanoid") and p1.Character.Humanoid.Health > 0;
+end;
+
+local function z3(p2, p3, ...)
+	local z4 = { v6, ... };
+	if z2(v5) then
+		table.insert(z4, v5.Character);
+	end;
+	local z5 = workspace:FindPartOnRayWithIgnoreList(Ray.new(p2, p3.Position - p2), z4, false, true);
+	return z5 and z5:IsDescendantOf(p3.Parent);
+end;
+
+local function z6()
+	local z7 = {};
+	for _, z8 in v7:GetChildren() do
+		for _, z9 in z8:GetChildren() do
+			table.insert(z7, z9);
+		end;
+	end;
+	return z7;
+end;
+
+local function z10(...)
+	local z11, z12 = nil, z1.Fov.Radius;
+
+	for _, z13 in z6() do
+		if not z13:FindFirstChild("HumanoidRootPart") then continue end;
+		local z14 = z13:FindFirstChild(z1.HitPart);
+		if not z14 then continue end;
+		if z1.WallCheck and not z3(v6.CFrame.Position, z14, ...) then continue end;
+		local z15, z16 = v6:WorldToViewportPoint(z14.Position);
+		if not z16 then continue end;
+		local z17 = (Vector2.new(z15.X, z15.Y) - v6.ViewportSize / 2).Magnitude;
+		if z17 < z12 then
+			z12 = z17;
+			z11 = z14;
+		end;
+	end;
+
+	for i, z18 in v4:GetPlayers() do
+		if z18 == v5 then continue end;
+		if not z2(z18) then continue end;
+		local z19 = z18.Character:FindFirstChild(z1.HitPart);
+		if not z19 then continue end;
+		if z1.WallCheck and not z3(v6.CFrame.Position, z19, ...) then continue end;
+		local z20, z21 = v6:WorldToViewportPoint(z19.Position);
+		if not z21 then continue end;
+		local z22 = (Vector2.new(z20.X, z20.Y) - v6.ViewportSize / 2).Magnitude;
+		if z22 < z12 then
+			z12 = z22;
+			z11 = z19;
+		end;
+	end;
+
+	return z11;
+end;
+
+local function z23(a, b, c)
+	local d = b^2 - 4 * a * c;
+	if d < 0 then return nil, nil end;
+	local sqrtD = math.sqrt(d);
+	local r1 = (-b - sqrtD) / (2 * a);
+	local r2 = (-b + sqrtD) / (2 * a);
+	return r1, r2;
+end;
+
+local function z24(dir, grav, speed)
+	local r1, r2 = z23(
+		grav:Dot(grav) / 4,
+		grav:Dot(dir) - speed^2,
+		dir:Dot(dir)
+	);
+	if r1 and r2 then
+		if r1 > 0 and r1 < r2 then return math.sqrt(r1) end;
+		if r2 > 0 and r2 < r1 then return math.sqrt(r2) end;
+	end;
+	return 0;
+end;
+
+local function z25(o, t, spd, acc)
+	local g = Vector3.yAxis * (acc * 2);
+	local time = z24(t - o, g, spd);
+	return 0.5 * g * time^2;
+end;
+
+local function z26(t, o, spd, acc)
+	local g = Vector3.yAxis * (acc * 2);
+	local time = z24(t.Position - o, g, spd);
+	return t.Position + (t.Velocity * time);
+end;
+
+local z27;
+z27 = hookfunction(v9.CreateBullet, function(a, b, c, d, aim, e, ammo, tickVal, recoil)
+	if not z1.Enabled then
+		return z27(a, b, c, d, aim, e, ammo, tickVal, recoil);
+	end;
+
+	local t = z10(b, c, d, aim);
+	if t then
+		local dat = v3.AmmoTypes:FindFirstChild(ammo);
+		local acc = dat:GetAttribute("ProjectileDrop");
+		local spd = dat:GetAttribute("MuzzleVelocity");
+
+		dat:SetAttribute("Drag", 0); -- no drag
+
+		local pred = (z1.Prediction and z26(t, aim.Position, spd, acc)) or t.Position;
+		local drop = z25(aim.Position, pred, spd, acc);
+		local newAim = {
+			["CFrame"] = CFrame.new(aim.Position, pred + drop)
+		};
+
+		return z27(a, b, c, d, newAim, e, ammo, tickVal, recoil);
+	end;
+
+	return z27(a, b, c, d, aim, e, ammo, tickVal, recoil);
+end);
+
+warn("[SilentAim] Enabled. Obfuscated Version.")
+
+-- [เพิ่ม] ================================================================
+-- [เพิ่ม] ส่วนเสริมต่อท้าย (โค้ดฐานด้านบนเก็บต้นฉบับไว้ครบ):
+-- [เพิ่ม]   1) วง FOV โชว์กลางจอ ตามค่า z1.Fov ของสคริปต์ฐาน
+-- [เพิ่ม]   2) ESP กล่อง + ชื่อ + ระยะ + เลือด รอบซอมบี้ (AiZones) และผู้เล่น
+-- [เพิ่ม]   3) ท้องฟ้าสว่าง (Fullbright) มองเห็นในที่มืด/กลางคืน
+-- [เพิ่ม] วาดด้วย GUI ล้วน (Frame/UICorner/UIStroke) ไม่แตะ API วาดภาพ (Drawing)
+-- [เพิ่ม] จึงขึ้นแน่นอนทั้ง PC และมือถือ (Delta) และไม่ใช้เมาส์/คีย์บอร์ดเลย
+-- [เพิ่ม] ================================================================
+
+local DELTA_VIS_NAME = "SA_DELTA_VIS"
+
+-- [เพิ่ม] หาที่แปะ GUI: ใช้ hidden UI holder ถ้า executor มี ไม่มีค่อยใช้ CoreGui
+local function visGuiParent()
+	local okHui, hui = pcall(function()
+		if gethui then return gethui() end
+		return nil
+	end)
+	if okHui and hui then return hui end
+	return game:GetService("CoreGui")
+end
+
+-- [เพิ่ม] เก็บกวาด GUI รอบเก่า (กันวง FOV/ESP ซ้อนกันเวลารันซ้ำโดยไม่รีเข้าเกม)
+do
+	local oldHolders = { visGuiParent(), v5:FindFirstChild("PlayerGui") }
+	for _, holder in ipairs(oldHolders) do
+		if holder then
+			local oldGui = holder:FindFirstChild(DELTA_VIS_NAME)
+			if oldGui then oldGui:Destroy() end
+		end
+	end
+end
+
+-- [เพิ่ม] ScreenGui หลักของส่วนเสริม (แปะไม่ได้ค่อยลง PlayerGui)
+local visGui = Instance.new("ScreenGui")
+visGui.Name = DELTA_VIS_NAME
+visGui.ResetOnSpawn = false
+visGui.IgnoreGuiInset = true
+visGui.DisplayOrder = 999999
+local visPasted = pcall(function() visGui.Parent = visGuiParent() end)
+if (not visPasted) or visGui.Parent == nil then
+	visGui.Parent = v5:FindFirstChild("PlayerGui") or v5:WaitForChild("PlayerGui")
+end
+
+-- [เพิ่ม] อ้างค่าตั้งของสคริปต์ฐาน (z1.Fov) มาใช้
+local FovCfg = z1.Fov
+
+-- [เพิ่ม] วง FOV กลางจอ: เฟรมโปร่งใส + UICorner กลม + UIStroke เส้นรอบวง
+local fovFrame = Instance.new("Frame")
+fovFrame.Name = "FovCircle"
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Position = UDim2.fromScale(0.5, 0.5)
+fovFrame.BackgroundTransparency = 1
+fovFrame.Visible = (FovCfg.Visible == true)
+fovFrame.ZIndex = 5
+local fovCorner = Instance.new("UICorner")
+fovCorner.CornerRadius = UDim.new(0.5, 0)
+fovCorner.Parent = fovFrame
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Color = Color3.fromRGB(255, 0, 100)
+fovStroke.Thickness = 2
+fovStroke.Transparency = 0.2
+fovStroke.Parent = fovFrame
+fovFrame.Parent = visGui
+
+-- [เพิ่ม] ป้ายสถานะมุมซ้ายบน (เลื่อนลงมาหน่อยกันโดนบาร์บนของมือถือทับ)
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Name = "Status"
+statusLabel.AnchorPoint = Vector2.new(0, 0)
+statusLabel.Position = UDim2.fromOffset(8, 60)
+statusLabel.Size = UDim2.fromOffset(330, 24)
+statusLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+statusLabel.BackgroundTransparency = 0.45
+statusLabel.BorderSizePixel = 0
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 13
+statusLabel.TextColor3 = Color3.fromRGB(120, 255, 130)
+statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+statusLabel.Text = "SA เปิด | FOV " .. tostring(FovCfg.Radius or 600) .. " | ESP เปิด | สว่าง เปิด"
+statusLabel.Parent = visGui
+
+-- [เพิ่ม] ===== ESP: กล่อง + ชื่อ + ระยะ + แถบเลือด (GUI ล้วน ใช้วัตถุซ้ำ กันแลคมือถือ) =====
+local ESP_COLOR_ZOMBIE = Color3.fromRGB(255, 70, 70)
+local ESP_COLOR_PLAYER = Color3.fromRGB(80, 170, 255)
+local espCache = {}
+
+-- [เพิ่ม] เช็กยังมีชีวิตไหม (ซอมบี้: ใช้ Humanoid ถ้ามี ไม่มีค่อยดู attribute Dead/Health)
+local function espAlive(rig)
+	local hum = rig:FindFirstChildOfClass("Humanoid")
+	if hum then return hum.Health > 0 end
+	if rig:GetAttribute("Dead") == true then return false end
+	local hpAttr = tonumber(rig:GetAttribute("Health"))
+	if hpAttr ~= nil then return hpAttr > 0 end
+	return true
+end
+
+-- [เพิ่ม] สร้างชุดกล่อง ESP 1 ชุด (สร้างครั้งเดียวต่อเป้า ไม่สร้างทิ้งทุกเฟรม)
+local function espMake(color)
+	local box = Instance.new("Frame")
+	box.Name = "ESPBox"
+	box.BackgroundTransparency = 1
+	box.BorderSizePixel = 0
+	box.Visible = false
+	box.ZIndex = 4
+	local boxStroke = Instance.new("UIStroke")
+	boxStroke.Color = color
+	boxStroke.Thickness = 1.5
+	boxStroke.Transparency = 0.1
+	boxStroke.Parent = box
+
+	local name = Instance.new("TextLabel")
+	name.Name = "EspName"
+	name.BackgroundTransparency = 1
+	name.BorderSizePixel = 0
+	name.Position = UDim2.new(0, 0, 0, -17)
+	name.Size = UDim2.new(1, 0, 0, 14)
+	name.Font = Enum.Font.GothamBold
+	name.TextSize = 12
+	name.TextColor3 = color
+	name.TextStrokeTransparency = 0.3
+	name.TextTruncate = Enum.TextTruncate.AtEnd
+	name.Text = ""
+	name.Parent = box
+
+	local dist = Instance.new("TextLabel")
+	dist.Name = "EspDist"
+	dist.BackgroundTransparency = 1
+	dist.BorderSizePixel = 0
+	dist.Position = UDim2.new(0, 0, 1, 2)
+	dist.Size = UDim2.new(1, 0, 0, 13)
+	dist.Font = Enum.Font.Gotham
+	dist.TextSize = 11
+	dist.TextColor3 = Color3.fromRGB(255, 255, 255)
+	dist.TextStrokeTransparency = 0.3
+	dist.Text = ""
+	dist.Parent = box
+
+	local hpBg = Instance.new("Frame")
+	hpBg.Name = "EspHpBg"
+	hpBg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	hpBg.BackgroundTransparency = 0.35
+	hpBg.BorderSizePixel = 0
+	hpBg.Position = UDim2.new(0, 0, 0, -7)
+	hpBg.Size = UDim2.new(1, 0, 0, 4)
+	local hpFill = Instance.new("Frame")
+	hpFill.Name = "EspHpFill"
+	hpFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+	hpFill.BorderSizePixel = 0
+	hpFill.Size = UDim2.new(1, 0, 1, 0)
+	hpFill.Parent = hpBg
+	hpBg.Parent = box
+
+	return { box = box, name = name, dist = dist, hpFill = hpFill, miss = 0 }
+end
+
+-- [เพิ่ม] วาดกล่อง ESP รอบ 1 เป้า (ย่อขยายตามระยะ หลุดจอซ่อน)
+local function espDraw(cam, rig, color, label)
+	local hrp = rig:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		local stale = espCache[rig]
+		if stale then stale.box.Visible = false end
+		return
+	end
+	local pos, onScreen = cam:WorldToViewportPoint(hrp.Position)
+	if (not onScreen) or pos.Z <= 0 then
+		local stale = espCache[rig]
+		if stale then stale.box.Visible = false end
+		return
+	end
+	local data = espCache[rig]
+	if not data then
+		data = espMake(color)
+		data.box.Parent = visGui
+		espCache[rig] = data
+	end
+	local topPos = cam:WorldToViewportPoint(hrp.Position + Vector3.new(0, 3, 0))
+	local botPos = cam:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+	local boxH = math.abs(topPos.Y - botPos.Y)
+	if boxH < 14 then boxH = 14 end
+	if boxH > 420 then boxH = 420 end
+	local boxW = boxH * 0.6
+	if boxW < 12 then boxW = 12 end
+	data.box.Visible = true
+	data.box.Position = UDim2.fromOffset(math.floor(pos.X - boxW * 0.5 + 0.5), math.floor(pos.Y - boxH * 0.5 + 0.5))
+	data.box.Size = UDim2.fromOffset(math.floor(boxW + 0.5), math.floor(boxH + 0.5))
+	data.name.Text = label
+	data.dist.Text = tostring(math.floor((cam.CFrame.Position - hrp.Position).Magnitude + 0.5)) .. " m"
+	local hum = rig:FindFirstChildOfClass("Humanoid")
+	local hpPct = 1
+	if hum and hum.MaxHealth > 0 then
+		hpPct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+	end
+	data.hpFill.Size = UDim2.new(hpPct, 0, 1, 0)
+	data.hpFill.BackgroundColor3 = Color3.fromRGB(math.floor(255 * (1 - hpPct) + 0.5), math.floor(255 * hpPct + 0.5), 0)
+end
+
+-- [เพิ่ม] รวมเป้าทั้งหมด: ซอมบี้ใน AiZones (โครงสร้างเดียวกับตัวเลือกเป้าของสคริปต์ฐาน) + ผู้เล่นคนอื่น
+local function espUpdate(cam)
+	local seen = {}
+	for _, zone in ipairs(v7:GetChildren()) do
+		for _, rig in ipairs(zone:GetChildren()) do
+			if rig:FindFirstChild("HumanoidRootPart") and espAlive(rig) then
+				seen[rig] = true
+				espDraw(cam, rig, ESP_COLOR_ZOMBIE, rig.Name)
+			end
+		end
+	end
+	for _, plr in ipairs(v4:GetPlayers()) do
+		if plr ~= v5 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local plrHum = plr.Character:FindFirstChildOfClass("Humanoid")
+			if plrHum and plrHum.Health > 0 then
+				seen[plr.Character] = true
+				espDraw(cam, plr.Character, ESP_COLOR_PLAYER, plr.DisplayName)
+			end
+		end
+	end
+	local toRemove = nil
+	for rig, data in pairs(espCache) do
+		if seen[rig] then
+			data.miss = 0
+		else
+			data.miss = (data.miss or 0) + 1
+			data.box.Visible = false
+			if (rig.Parent == nil) or (data.miss > 300) then
+				if toRemove == nil then toRemove = {} end
+				table.insert(toRemove, rig)
+			end
+		end
+	end
+	if toRemove then
+		for _, rig in ipairs(toRemove) do
+			local data = espCache[rig]
+			if data then
+				data.box:Destroy()
+				espCache[rig] = nil
+			end
+		end
+	end
+end
+
+-- [เพิ่ม] ลูปวาดทุกเฟรม: วง FOV ตามค่าสคริปต์ฐาน + กล้องดึงใหม่ทุกเฟรม (เกิดใหม่/กล้องเปลี่ยนไม่พัง)
+v1.RenderStepped:Connect(function()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	fovFrame.Visible = (FovCfg.Visible == true)
+	local circleRadius = FovCfg.Radius or 300
+	fovFrame.Size = UDim2.fromOffset(math.floor(circleRadius * 2 + 0.5), math.floor(circleRadius * 2 + 0.5))
+	pcall(espUpdate, cam)
+end)
+
+-- [เพิ่ม] ท้องฟ้าสว่าง (Fullbright) + ค้าไว้ทุก 5 วินาที กันเกมรีเซ็ตแสงกลับ
+local Lighting = game:GetService("Lighting")
+local function applyFullbright()
+	Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+	Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+	Lighting.Brightness = 3
+	Lighting.ClockTime = 14
+	Lighting.FogEnd = 100000
+	Lighting.GlobalShadows = false
+end
+pcall(applyFullbright)
+task.spawn(function()
+	while true do
+		task.wait(5)
+		pcall(applyFullbright)
+	end
+end)
+
+-- [เพิ่ม] แจ้งคอนโซลว่าส่วนเสริมโหลดครบ
+warn("[SA Delta Mobile] FOV + ESP + ท้องฟ้าสว่าง พร้อมทำงานแล้ว (รันซ้ำต้องรีเข้าเกมก่อนทุกครั้ง)")
